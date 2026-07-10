@@ -26,7 +26,7 @@ function restrictIntercomRuntimeFile(filePath, platform = process.platform) {
 }
 
 // broker/spawn.ts
-import { join as join2, dirname } from "path";
+import { join as join2, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
 var INTERCOM_DIR = getIntercomDirPath();
 var EXTENSION_DIR = join2(dirname(fileURLToPath(import.meta.url)), "..");

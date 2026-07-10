@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import net from "net";
@@ -56,6 +56,21 @@ export function getTsxCliPath(extensionDir: string = EXTENSION_DIR): string {
   }
 }
 
+export function getBrokerEntryPath(moduleUrl: string = import.meta.url): string {
+  const directory = dirname(fileURLToPath(moduleUrl));
+  const bundled = join(directory, "broker.mjs");
+  return existsSync(bundled) ? bundled : join(directory, "broker.ts");
+}
+
+export function getNodeExecutable(
+  execPath: string = process.execPath,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const executable = basename(execPath).toLowerCase();
+  if (executable === "node" || executable === "node.exe") return execPath;
+  return platform === "win32" ? "node.exe" : "node";
+}
+
 function quoteWindowsArg(value: string): string {
   return `"${value.replace(/"/g, '""')}"`;
 }
@@ -79,6 +94,9 @@ export function getWindowsBrokerCommandLine(
   brokerArgs: string[] = ["--no-install", "tsx"],
 ): string {
   if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
+    if (extname(brokerPath) === ".mjs") {
+      return [quoteWindowsArg(nodePath), quoteWindowsArg(brokerPath)].join(" ");
+    }
     return [quoteWindowsArg(nodePath), quoteWindowsArg(getTsxCliPath(extensionDir)), quoteWindowsArg(brokerPath)].join(" ");
   }
 
@@ -139,6 +157,13 @@ export function getBrokerLaunchSpec(
   }
 
   if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
+    if (extname(brokerPath) === ".mjs") {
+      return {
+        kind: "direct",
+        command: nodePath,
+        args: [brokerPath],
+      };
+    }
     return {
       kind: "direct",
       command: nodePath,
@@ -197,8 +222,16 @@ export async function spawnBrokerIfNeeded(brokerCommand: string, brokerArgs: str
       await stopBrokerProcess();
     }
 
-    const brokerPath = join(dirname(fileURLToPath(import.meta.url)), "broker.ts");
-    const launch = getBrokerLaunchSpec(brokerPath, brokerCommand, brokerArgs);
+    const brokerPath = getBrokerEntryPath();
+    const launch = getBrokerLaunchSpec(
+      brokerPath,
+      brokerCommand,
+      brokerArgs,
+      EXTENSION_DIR,
+      process.platform,
+      INTERCOM_DIR,
+      getNodeExecutable(),
+    );
     if (launch.kind === "windows-launcher") {
       writeWindowsHiddenLauncher(launch.launcherCommandLine, launch.launcherPath);
     }

@@ -5,7 +5,7 @@ import { tool } from "@opencode-ai/plugin";
 // opencode/runtime.ts
 import { randomUUID as randomUUID4, createHash as createHash2 } from "crypto";
 import { spawnSync } from "child_process";
-import { basename } from "path";
+import { basename as basename2 } from "path";
 import { cwd as processCwd } from "process";
 
 // broker/client.ts
@@ -853,7 +853,7 @@ var IntercomClient = class extends EventEmitter {
 // broker/spawn.ts
 import { spawn } from "child_process";
 import { existsSync as existsSync2, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
-import { join as join3, dirname as dirname2 } from "path";
+import { join as join3, dirname as dirname2, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import net2 from "net";
@@ -874,6 +874,16 @@ function getTsxCliPath(extensionDir = EXTENSION_DIR) {
     return join3(extensionDir, "node_modules", "tsx", "dist", "cli.mjs");
   }
 }
+function getBrokerEntryPath(moduleUrl = import.meta.url) {
+  const directory = dirname2(fileURLToPath(moduleUrl));
+  const bundled = join3(directory, "broker.mjs");
+  return existsSync2(bundled) ? bundled : join3(directory, "broker.ts");
+}
+function getNodeExecutable(execPath = process.execPath, platform = process.platform) {
+  const executable = basename(execPath).toLowerCase();
+  if (executable === "node" || executable === "node.exe") return execPath;
+  return platform === "win32" ? "node.exe" : "node";
+}
 function quoteWindowsArg(value) {
   return `"${value.replace(/"/g, '""')}"`;
 }
@@ -885,6 +895,9 @@ function usesDefaultBrokerCommand(brokerCommand, brokerArgs) {
 }
 function getWindowsBrokerCommandLine(brokerPath, extensionDir = EXTENSION_DIR, nodePath = process.execPath, brokerCommand = "npx", brokerArgs = ["--no-install", "tsx"]) {
   if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
+    if (extname(brokerPath) === ".mjs") {
+      return [quoteWindowsArg(nodePath), quoteWindowsArg(brokerPath)].join(" ");
+    }
     return [quoteWindowsArg(nodePath), quoteWindowsArg(getTsxCliPath(extensionDir)), quoteWindowsArg(brokerPath)].join(" ");
   }
   return [quoteWindowsArg(brokerCommand), ...brokerArgs.map(quoteWindowsArg), quoteWindowsArg(brokerPath)].join(" ");
@@ -925,6 +938,13 @@ function getBrokerLaunchSpec(brokerPath, brokerCommand, brokerArgs, extensionDir
     };
   }
   if (usesDefaultBrokerCommand(brokerCommand, brokerArgs)) {
+    if (extname(brokerPath) === ".mjs") {
+      return {
+        kind: "direct",
+        command: nodePath,
+        args: [brokerPath]
+      };
+    }
     return {
       kind: "direct",
       command: nodePath,
@@ -966,8 +986,16 @@ async function spawnBrokerIfNeeded(brokerCommand, brokerArgs) {
     if (await checkBrokerHealth() === "incompatible") {
       await stopBrokerProcess();
     }
-    const brokerPath = join3(dirname2(fileURLToPath(import.meta.url)), "broker.ts");
-    const launch = getBrokerLaunchSpec(brokerPath, brokerCommand, brokerArgs);
+    const brokerPath = getBrokerEntryPath();
+    const launch = getBrokerLaunchSpec(
+      brokerPath,
+      brokerCommand,
+      brokerArgs,
+      EXTENSION_DIR,
+      process.platform,
+      INTERCOM_DIR,
+      getNodeExecutable()
+    );
     if (launch.kind === "windows-launcher") {
       writeWindowsHiddenLauncher(launch.launcherCommandLine, launch.launcherPath);
     }
@@ -1259,7 +1287,7 @@ function shortHash(value) {
 }
 function buildOpenCodeRuntimeIdentity(env = process.env, cwd = env.PWD || processCwd(), pid = process.pid) {
   const sessionId = env.OPENCODE_INTERCOM_SESSION_ID?.trim() || env.OPENCODE_SESSION_ID?.trim() || `opencode-${pid}-${shortHash(cwd)}`;
-  const cwdName = basename(cwd) || "workspace";
+  const cwdName = basename2(cwd) || "workspace";
   const name = env.OPENCODE_INTERCOM_NAME?.trim() || env.OPENCODE_PEER_NAME?.trim() || `opencode-${cwdName}-${pid}`;
   return {
     sessionId,

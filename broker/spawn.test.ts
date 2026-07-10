@@ -7,6 +7,8 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   getBrokerLaunchSpec,
+  getBrokerEntryPath,
+  getNodeExecutable,
   getBrokerSpawnOptions,
   getTsxCliPath,
   getWindowsHiddenLauncherScript,
@@ -15,6 +17,34 @@ import {
   isBrokerHealthOkMessage,
   stopBrokerProcess,
 } from "./spawn.ts";
+
+test("getBrokerEntryPath prefers the bundled broker beside a packaged module", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "opencode-intercom-entry-"));
+  try {
+    const modulePath = path.join(root, "plugin.mjs");
+    const bundledBroker = path.join(root, "broker.mjs");
+    writeFileSync(bundledBroker, "");
+    assert.equal(getBrokerEntryPath(new URL(`file://${modulePath}`).href), bundledBroker);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("getBrokerEntryPath falls back to the TypeScript source broker", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "opencode-intercom-entry-"));
+  try {
+    const modulePath = path.join(root, "spawn.ts");
+    assert.equal(getBrokerEntryPath(new URL(`file://${modulePath}`).href), path.join(root, "broker.ts"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("getNodeExecutable does not mistake the OpenCode Bun binary for Node", () => {
+  assert.equal(getNodeExecutable("/opt/opencode/opencode.exe", "linux"), "node");
+  assert.equal(getNodeExecutable("C:/opencode/opencode.exe", "win32"), "node.exe");
+  assert.equal(getNodeExecutable("/usr/bin/node", "linux"), "/usr/bin/node");
+});
 
 test("getTsxCliPath resolves tsx cli via module resolution", () => {
   const cliPath = getTsxCliPath("C:/repo");
@@ -94,6 +124,13 @@ test("getBrokerLaunchSpec uses node + resolved tsx for the default non-Windows l
     getTsxCliPath("C:/repo"),
     "C:/repo/broker.ts",
   ]);
+  assert.equal(spec.kind, "direct");
+});
+
+test("getBrokerLaunchSpec runs a bundled broker directly with node", () => {
+  const spec = getBrokerLaunchSpec("/repo/dist/broker.mjs", "npx", ["--no-install", "tsx"], "/repo/dist", "linux", "/tmp/intercom", "/usr/bin/node");
+  assert.equal(spec.command, "/usr/bin/node");
+  assert.deepEqual(spec.args, ["/repo/dist/broker.mjs"]);
   assert.equal(spec.kind, "direct");
 });
 
