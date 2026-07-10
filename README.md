@@ -41,21 +41,35 @@ npm install
 npm run build
 ```
 
-Add the plugin to OpenCode config:
+Add the server plugin to your normal OpenCode config (usually
+`~/.config/opencode/opencode.json`):
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "/home/dxyz/src/github.com/dataforxyz/opencode-intercom/dist/plugin.mjs",
-    "/home/dxyz/src/github.com/dataforxyz/opencode-intercom/dist/tui.mjs"
+    "/path/to/opencode-intercom/dist/plugin.mjs"
   ]
 }
 ```
 
-Restart OpenCode after changing plugin config.
+To add **Alt+I** and `/intercom-contact`, put the separate TUI plugin in
+`~/.config/opencode/tui.json`:
 
-The optional TUI entry adds **Alt+I** and `/intercom-contact`. Both copy (or, if
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": [
+    "/path/to/opencode-intercom/dist/tui.mjs"
+  ]
+}
+```
+
+OpenCode keeps server and TUI plugins in separate configuration files. Do not
+put `dist/tui.mjs` in `opencode.json`: the server plugin loader will reject it.
+Restart OpenCode after changing either config.
+
+The optional TUI plugin adds **Alt+I** and `/intercom-contact`. Both copy (or, if
 no system clipboard helper is installed, display) `intercom send ID: <id>`.
 Linux clipboard support uses `wl-copy`, `xclip`, or `xsel`; macOS uses
 `pbcopy`, and Windows uses `clip.exe`.
@@ -99,7 +113,7 @@ after their original tool call completes.
 Start a long-lived receiver:
 
 ```bash
-OPENCODE_CONFIG_CONTENT='{"$schema":"https://opencode.ai/config.json","plugin":["/home/dxyz/src/github.com/dataforxyz/opencode-intercom/dist/plugin.mjs"],"permission":{"bash":"allow"}}' \
+OPENCODE_CONFIG_CONTENT='{"$schema":"https://opencode.ai/config.json","plugin":["/path/to/opencode-intercom/dist/plugin.mjs"],"permission":{"bash":"allow"}}' \
 OPENCODE_INTERCOM_NAME=opencode-live-test \
 OPENCODE_INTERCOM_SESSION_ID=opencode-live-test \
 opencode run --auto --format json "Run bash command sleep 60. Then output done. Do not call any intercom tools."
@@ -109,14 +123,14 @@ Confirm it registered from Pi:
 
 ```bash
 PI_INTERCOM_SESSION_ID=pi-list-test \
-pi --no-extensions --extension /home/dxyz/src/github.com/dataforxyz/pi-intercom/index.ts --no-skills --mode json --print "Use the intercom tool with action list once. Output only the tool result."
+pi --no-extensions --extension /path/to/pi-intercom/index.ts --no-skills --mode json --print "Use the intercom tool with action list once. Output only the tool result."
 ```
 
 Send a message from Pi while the receiver is still in `sleep`:
 
 ```bash
 PI_INTERCOM_SESSION_ID=pi-send-test \
-pi --no-extensions --extension /home/dxyz/src/github.com/dataforxyz/pi-intercom/index.ts --no-skills --mode json --print "Use the intercom tool with action send to send this exact message to opencode-live-test: hello from pi live test. Output only the tool result."
+pi --no-extensions --extension /path/to/pi-intercom/index.ts --no-skills --mode json --print "Use the intercom tool with action send to send this exact message to opencode-live-test: hello from pi live test. Output only the tool result."
 ```
 
 Then inspect the receiver session:
