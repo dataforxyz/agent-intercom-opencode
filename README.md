@@ -9,6 +9,10 @@
 | Claude Code | [`agent-intercom-claude`](https://github.com/dataforxyz/agent-intercom-claude) |
 | OpenCode | [`agent-intercom-opencode`](https://github.com/dataforxyz/agent-intercom-opencode) |
 
+## Origin and thanks
+
+Agent Intercom grew from [Nico Bailon's original `pi-intercom`](https://github.com/nicobailon/pi-intercom). A sincere thank you to Nico and the original contributors for creating the Pi extension and the foundation this cross-harness family builds on.
+
 This repository contains the OpenCode adapter. It gives OpenCode native intercom tools and lets OpenCode participate in the same local agent mesh as Pi, Codex, and Claude Code sessions.
 
 ## What It Does
