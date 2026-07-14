@@ -105,6 +105,17 @@ native commands.
 
 No wrapper alias is required for OpenCode as a worker: once both config files are present, plain `opencode` has the shortcuts and slash commands. This differs from hosts whose terminal wrappers are responsible for their keybindings.
 
+### Use Pi as the fleet manager
+
+Install both Pi packages, then restart Pi or run `/reload`:
+
+```bash
+pi install git:github.com/dataforxyz/agent-intercom-pi
+pi install git:github.com/dataforxyz/agent-intercom-orchestrator
+```
+
+Inside Pi, run `agent_fleet({ action: "doctor" })` to confirm this OpenCode plugin is visible in OpenCode's resolved configuration. The orchestrator Pi package provides the `agent_fleet` tool, `/agents*` commands, scoped footer, and bundled manager Agent Skill.
+
 ### Enable OpenCode as the primary fleet manager
 
 Install or link the orchestrator package so its `agent-intercom-fleet` executable is available:
