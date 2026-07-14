@@ -1281,12 +1281,93 @@ function loadConfig() {
   }
 }
 
+// opencode/inbound-store.ts
+import { existsSync as existsSync4, readFileSync as readFileSync5 } from "fs";
+import { dirname as dirname3, join as join5 } from "path";
+var EMPTY_STATE = { version: 1, records: {}, delivered: [] };
+var MAX_DELIVERED_IDS = 1e3;
+function sanitizeSegment(value) {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase() || "opencode";
+}
+function getOpenCodeInboundStatePath(sessionId, intercomDir = getIntercomDirPath()) {
+  return join5(intercomDir, `opencode-inbound-${sanitizeSegment(sessionId)}.json`);
+}
+function normalizeState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return structuredClone(EMPTY_STATE);
+  const input = value;
+  if (input.version !== 1 || !input.records || typeof input.records !== "object" || Array.isArray(input.records)) {
+    return structuredClone(EMPTY_STATE);
+  }
+  return {
+    version: 1,
+    records: input.records,
+    delivered: Array.isArray(input.delivered) ? input.delivered.filter((id) => typeof id === "string").slice(-MAX_DELIVERED_IDS) : []
+  };
+}
+var DurableInboundStore = class {
+  path;
+  state;
+  constructor(path) {
+    this.path = path;
+    ensureIntercomRuntimeDir(dirname3(path));
+    this.state = this.load();
+  }
+  load() {
+    if (!existsSync4(this.path)) return structuredClone(EMPTY_STATE);
+    try {
+      return normalizeState(JSON.parse(readFileSync5(this.path, "utf8")));
+    } catch {
+      return structuredClone(EMPTY_STATE);
+    }
+  }
+  save() {
+    writeDurableJson(this.path, this.state);
+  }
+  rememberDelivered(messageId) {
+    this.state.delivered = [...this.state.delivered.filter((id) => id !== messageId), messageId].slice(-MAX_DELIVERED_IDS);
+  }
+  enqueue(entry) {
+    const messageId = entry.message.id;
+    if (this.state.delivered.includes(messageId)) return "delivered";
+    const existing = this.state.records[messageId];
+    if (existing) return existing.injected ? "injected" : "pending";
+    this.state.records[messageId] = { entry, injected: false };
+    this.save();
+    return "new";
+  }
+  pendingInjection() {
+    return Object.values(this.state.records).filter((record) => !record.injected).map((record) => record.entry);
+  }
+  unresolvedAsks() {
+    return Object.values(this.state.records).filter((record) => record.entry.message.expectsReply).map((record) => record.entry);
+  }
+  retainedEntries() {
+    return Object.values(this.state.records).map((record) => record.entry);
+  }
+  markInjected(messageId) {
+    const record = this.state.records[messageId];
+    if (!record) return;
+    if (record.entry.message.expectsReply) {
+      record.injected = true;
+    } else {
+      delete this.state.records[messageId];
+      this.rememberDelivered(messageId);
+    }
+    this.save();
+  }
+  markReplied(messageId) {
+    delete this.state.records[messageId];
+    this.rememberDelivered(messageId);
+    this.save();
+  }
+};
+
 // opencode/runtime.ts
 function shortHash(value) {
   return createHash2("sha256").update(value).digest("hex").slice(0, 8);
 }
 function buildOpenCodeRuntimeIdentity(env = process.env, cwd = env.PWD || processCwd(), pid = process.pid) {
-  const sessionId = env.OPENCODE_INTERCOM_SESSION_ID?.trim() || env.OPENCODE_SESSION_ID?.trim() || `opencode-${pid}-${shortHash(cwd)}`;
+  const sessionId = env.OPENCODE_INTERCOM_SESSION_ID?.trim() || `opencode-${pid}-${shortHash(cwd)}`;
   const cwdName = basename2(cwd) || "workspace";
   const name = env.OPENCODE_INTERCOM_NAME?.trim() || env.OPENCODE_PEER_NAME?.trim() || `opencode-${cwdName}-${pid}`;
   return {
@@ -1369,9 +1450,15 @@ var OpenCodeIntercomRuntime = class {
   unresolvedAsks = /* @__PURE__ */ new Map();
   replyWaiters = /* @__PURE__ */ new Map();
   onInboundMessage;
-  constructor(identity, cwd, onInboundMessage) {
+  inboundStore;
+  constructor(identity, cwd, onInboundMessage, inboundStore) {
     this.identity = identity ?? buildOpenCodeRuntimeIdentity(process.env, cwd);
     this.onInboundMessage = onInboundMessage;
+    this.inboundStore = inboundStore ?? new DurableInboundStore(
+      process.env.OPENCODE_INTERCOM_INBOUND_STATE?.trim() || getOpenCodeInboundStatePath(this.identity.sessionId)
+    );
+    this.unread = this.inboundStore.retainedEntries();
+    for (const entry of this.inboundStore.unresolvedAsks()) this.unresolvedAsks.set(entry.message.id, entry);
   }
   getIdentity() {
     return this.identity;
@@ -1404,6 +1491,11 @@ var OpenCodeIntercomRuntime = class {
       status: "idle"
     }, this.identity.sessionId);
     this.client = client;
+    for (const entry of this.inboundStore.pendingInjection()) {
+      void Promise.resolve(this.onInboundMessage?.(entry)).catch((error) => {
+        console.error("Failed to replay durable inbound intercom message:", error);
+      });
+    }
     return client;
   }
   async disconnect() {
@@ -1426,6 +1518,11 @@ var OpenCodeIntercomRuntime = class {
       }
     }
     const entry = { from, message, deliveryId, receivedAt: Date.now(), read: false };
+    const disposition = this.inboundStore.enqueue(entry);
+    if (disposition !== "new") {
+      this.client?.acknowledgeMessage(deliveryId);
+      return;
+    }
     this.unread.push(entry);
     if (message.expectsReply) {
       this.unresolvedAsks.set(message.id, entry);
@@ -1434,6 +1531,13 @@ var OpenCodeIntercomRuntime = class {
     void Promise.resolve(this.onInboundMessage?.(entry)).catch((error) => {
       console.error("Failed to inject inbound intercom message:", error);
     });
+  }
+  markInboundInjected(messageId) {
+    this.inboundStore.markInjected(messageId);
+  }
+  markInboundReplied(messageId) {
+    this.inboundStore.markReplied(messageId);
+    this.unresolvedAsks.delete(messageId);
   }
   waitForReply(from, replyTo, timeoutMs = getAskTimeoutMs(), signal) {
     return new Promise((resolve3, reject) => {
@@ -1526,7 +1630,7 @@ Pending asks: ${this.unresolvedAsks.size}`,
     if (!result.delivered) {
       return textResult(`Message to "${to}" was not delivered: ${result.reason ?? "Session may not exist or has disconnected."}`, { ok: false, accepted: result.accepted, delivered: false, message_id: result.id, delivery_id: result.deliveryId, code: result.code, reason: result.reason }, true);
     }
-    if (replyTo) this.unresolvedAsks.delete(replyTo);
+    if (replyTo) this.markInboundReplied(replyTo);
     return textResult(`Message sent to ${to}.`, { ok: true, accepted: result.accepted, delivered: true, message_id: result.id, delivery_id: result.deliveryId, to });
   }
   async ask(to, message, attachments, timeoutMs = getAskTimeoutMs(), signal) {
@@ -1598,14 +1702,123 @@ ${pendingAsks.map((entry) => `- ${entry.message.id} from ${entry.from.name || en
   }
 };
 
+// opencode/health.ts
+import { mkdirSync as mkdirSync3 } from "node:fs";
+import { dirname as dirname4 } from "node:path";
+function normalizeOpenCodeSessionStatus(value) {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object" && typeof value.type === "string") {
+    return value.type;
+  }
+  return "active";
+}
+var OpenCodePeerHealthReporter = class {
+  path;
+  health;
+  constructor(input) {
+    this.path = input.path?.trim() || void 0;
+    this.health = {
+      version: 1,
+      runId: input.runId?.trim() || "standalone",
+      workerId: input.workerId?.trim() || input.intercomSessionId,
+      intercomSessionId: input.intercomSessionId,
+      serverUrl: input.serverUrl,
+      directory: input.directory,
+      pid: input.pid ?? process.pid,
+      connected: false,
+      ready: false,
+      status: "starting",
+      updatedAt: Date.now()
+    };
+    this.write();
+  }
+  update(patch) {
+    this.health = {
+      ...this.health,
+      ...patch,
+      updatedAt: Date.now()
+    };
+    this.health.ready = this.health.connected && Boolean(this.health.openCodeSessionId) && !this.health.error;
+    this.write();
+    return this.snapshot();
+  }
+  snapshot() {
+    return structuredClone(this.health);
+  }
+  write() {
+    if (!this.path) return;
+    mkdirSync3(dirname4(this.path), { recursive: true, mode: 448 });
+    writeDurableJson(this.path, this.health);
+  }
+};
+
+// opencode/fleet.ts
+import { spawn as spawn2 } from "node:child_process";
+function isFleetManagementEnabled(env = process.env) {
+  const enabled = env.OPENCODE_INTERCOM_FLEET === "1" || env.OPENCODE_INTERCOM_FLEET === "true";
+  if (!enabled) return false;
+  const ownedWorker = env.AGENT_INTERCOM_OWNED === "1";
+  const allowNested = env.OPENCODE_INTERCOM_FLEET_ALLOW_NESTED === "1";
+  return !ownedWorker || allowNested;
+}
+async function invokeAgentFleet(params, context, env = process.env) {
+  const command = env.AGENT_INTERCOM_FLEET_COMMAND?.trim() || "agent-intercom-fleet";
+  const timeoutMs = Number(env.AGENT_INTERCOM_FLEET_TIMEOUT_MS || 12e4);
+  return new Promise((resolve3, reject) => {
+    const child = spawn2(command, [], {
+      cwd: context.cwd,
+      env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timer;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve3(value);
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => finish(new Error(`Could not start ${command}: ${error.message}`, { cause: error })));
+    child.on("close", (code) => {
+      let response;
+      try {
+        response = JSON.parse(stdout.trim());
+      } catch {
+        finish(new Error(`${command} returned invalid JSON: ${stderr.trim() || stdout.trim() || `exit ${code}`}`));
+        return;
+      }
+      if (code !== 0 || response?.ok !== true) {
+        finish(new Error(response?.error || stderr.trim() || `${command} exited with ${code}`));
+        return;
+      }
+      finish(void 0, response.result);
+    });
+    child.stdin.end(JSON.stringify({ params, managerSessionId: context.managerSessionId, cwd: context.cwd }));
+    timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error(`${command} timed out after ${timeoutMs}ms`));
+    }, Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12e4);
+    timer.unref?.();
+  });
+}
+
 // opencode/control.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, renameSync as renameSync3, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync6, readdirSync, renameSync as renameSync3, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join6 } from "node:path";
 var CONTROL_DIR_NAME = "opencode-control";
 function controlDir() {
-  const directory = join5(getIntercomDirPath(), CONTROL_DIR_NAME);
-  mkdirSync3(directory, { recursive: true, mode: 448 });
+  const directory = join6(getIntercomDirPath(), CONTROL_DIR_NAME);
+  mkdirSync4(directory, { recursive: true, mode: 448 });
   return directory;
 }
 function safeSessionId(sessionId) {
@@ -1630,15 +1843,15 @@ function startOpenCodeControlServer(options) {
     try {
       const files = readdirSync(directory).filter((file) => file.endsWith(".request.json"));
       for (const file of files) {
-        const requestPath = join5(directory, file);
+        const requestPath = join6(directory, file);
         let request;
         try {
-          request = JSON.parse(readFileSync5(requestPath, "utf8"));
+          request = JSON.parse(readFileSync6(requestPath, "utf8"));
         } catch {
           continue;
         }
         if (!request?.id || !request.sessionId || !options.acceptsSession(request.sessionId)) continue;
-        const responsePath = join5(directory, responseName(request.sessionId, request.id));
+        const responsePath = join6(directory, responseName(request.sessionId, request.id));
         let response;
         try {
           response = { ok: true, value: await options.handle(request.action) };
@@ -1670,13 +1883,15 @@ function listScope(value) {
   if (value === "machine" || value === "directory" || value === "repo") return value;
   throw new Error('scope must be one of "machine", "directory", or "repo"');
 }
-var OpenCodeIntercomPlugin = async ({ client, directory }) => {
-  let activeSessionID = process.env.OPENCODE_SESSION_ID?.trim() || void 0;
+var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
+  let activeSessionID = process.env.OPENCODE_INTERCOM_TARGET_SESSION?.trim() || process.env.OPENCODE_SESSION_ID?.trim() || void 0;
   let activeSessionStatus = "idle";
   const knownSessionIDs = /* @__PURE__ */ new Set();
   let flushingInjectQueue = false;
   const pendingInjectQueue = [];
   const deliveredMessageIDs = /* @__PURE__ */ new Set();
+  let runtime;
+  let healthReporter;
   const canUseTuiInjection = Boolean(process.stdin.isTTY || process.stdout.isTTY);
   const debugInject = process.env.OPENCODE_INTERCOM_DEBUG === "1";
   function logInject(step, details) {
@@ -1711,11 +1926,23 @@ var OpenCodeIntercomPlugin = async ({ client, directory }) => {
       responseBody
     });
   }
+  function rememberBounded(values, value, limit = 4096) {
+    values.add(value);
+    while (values.size > limit) {
+      const oldest = values.values().next().value;
+      if (typeof oldest !== "string") break;
+      values.delete(oldest);
+    }
+  }
   function setActiveSession(sessionID) {
     if (typeof sessionID === "string" && sessionID.trim()) {
       activeSessionID = sessionID;
-      knownSessionIDs.add(sessionID);
+      rememberBounded(knownSessionIDs, sessionID);
+      healthReporter?.update({ openCodeSessionId: sessionID, status: activeSessionStatus });
     }
+  }
+  function messageMarker(messageID) {
+    return `[agent-intercom-message:${messageID}]`;
   }
   function formatInboundPrompt(entry) {
     const from = entry.from.name || entry.from.id;
@@ -1726,7 +1953,8 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
       `Incoming intercom message from ${from} (${entry.from.model}, ${entry.from.cwd}):`,
       "",
       entry.message.content.text + formatAttachments(entry.message.content.attachments),
-      replyHint
+      replyHint,
+      messageMarker(entry.message.id)
     ].join("\n");
   }
   async function resolveActiveSessionID() {
@@ -1770,12 +1998,30 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
     logInject("queue.enqueue", { reason, messageID: entry.message.id, queueLength: pendingInjectQueue.length });
   }
   function markDelivered(messageID, path) {
-    deliveredMessageIDs.add(messageID);
+    rememberBounded(deliveredMessageIDs, messageID);
+    runtime.markInboundInjected(messageID);
     const queueIndex = pendingInjectQueue.findIndex((queued) => queued.entry.message.id === messageID);
     if (queueIndex >= 0) {
       pendingInjectQueue.splice(queueIndex, 1);
     }
     logInject("message.delivered", { messageID, path, queueLength: pendingInjectQueue.length });
+  }
+  async function sessionAlreadyContainsMessage(sessionID, messageID) {
+    const marker = messageMarker(messageID);
+    const result = await client.session.messages({
+      path: { id: sessionID },
+      query: { directory, limit: 200 }
+    }).catch((error) => {
+      logInject("session.messages.error", { sessionID, messageID, error: formatError(error) });
+      return void 0;
+    });
+    const messages = result?.data;
+    if (!messages) return false;
+    return messages.some((message) => message.parts.some((part) => {
+      if (part.type !== "text") return false;
+      const metadata = part.metadata;
+      return metadata?.intercomMessageId === messageID || part.text.includes(marker);
+    }));
   }
   async function flushPendingInjectQueue(trigger) {
     if (flushingInjectQueue || !pendingInjectQueue.length) {
@@ -1798,13 +2044,17 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
           continue;
         }
         const prompt = formatInboundPrompt(entry);
+        if (await sessionAlreadyContainsMessage(sessionID, entry.message.id)) {
+          markDelivered(entry.message.id, "session.messages.replay_dedupe");
+          continue;
+        }
         let result;
         try {
           result = await client.session.promptAsync({
             path: { id: sessionID },
             query: { directory },
             body: {
-              parts: [{ type: "text", text: prompt }]
+              parts: [{ type: "text", text: prompt, metadata: { intercomMessageId: entry.message.id } }]
             }
           });
         } catch (error) {
@@ -1904,11 +2154,15 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
       busy
     });
     try {
+      if (await sessionAlreadyContainsMessage(sessionID, entry.message.id)) {
+        markDelivered(entry.message.id, "session.messages.inject_dedupe");
+        return;
+      }
       const asyncResult = await client.session.promptAsync({
         path: { id: sessionID },
         query: { directory },
         body: {
-          parts: [{ type: "text", text: prompt }]
+          parts: [{ type: "text", text: prompt, metadata: { intercomMessageId: entry.message.id } }]
         }
       });
       await logResult("inject.promptAsync", asyncResult, { messageID: entry.message.id, sessionID, busy });
@@ -1926,12 +2180,29 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
       enqueuePendingInject(entry, "prompt_async_throw");
     }
   }
-  const runtime = new OpenCodeIntercomRuntime(void 0, directory, injectInbound);
-  void runtime.connect().catch((error) => {
-    console.error("Failed to start OpenCode intercom listener:", error);
+  runtime = new OpenCodeIntercomRuntime(void 0, directory, injectInbound);
+  const runtimeIdentity = runtime.getIdentity();
+  healthReporter = new OpenCodePeerHealthReporter({
+    path: process.env.AGENT_INTERCOM_OPENCODE_HEALTH_PATH,
+    runId: process.env.AGENT_INTERCOM_RUN_ID,
+    workerId: process.env.AGENT_INTERCOM_WORKER_ID,
+    intercomSessionId: runtimeIdentity.sessionId,
+    serverUrl: serverUrl.toString(),
+    directory
   });
-  void resolveActiveSessionID();
-  if (activeSessionID) knownSessionIDs.add(activeSessionID);
+  void (async () => {
+    try {
+      await runtime.connect();
+      healthReporter.update({ connected: true, status: activeSessionStatus, error: void 0 });
+      await resolveActiveSessionID();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      healthReporter.update({ connected: false, status: "error", error: message });
+      console.error("Failed to start OpenCode intercom listener:", error);
+    }
+  })();
+  if (activeSessionID) rememberBounded(knownSessionIDs, activeSessionID);
+  const fleetManagementEnabled = isFleetManagementEnabled();
   const stopControlServer = startOpenCodeControlServer({
     acceptsSession: (sessionID) => knownSessionIDs.has(sessionID),
     async handle(action) {
@@ -1955,9 +2226,38 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
   return {
     dispose: async () => {
       stopControlServer();
+      healthReporter.update({ connected: false, ready: false, status: "stopped" });
       await runtime.disconnect();
     },
     tool: {
+      ...fleetManagementEnabled ? {
+        agent_fleet: tool({
+          description: "Create, inspect, adopt, stop, and clean up systemd-owned Pi, Codex, Claude, and OpenCode coworkers. Enabled only for an explicitly configured primary OpenCode manager.",
+          args: {
+            action: tool.schema.string().describe("Fleet action: spawn, list, status, stop, cleanup, doctor, logs, renew, forget, adopt, capabilities, profiles, models, variants, or config."),
+            id: tool.schema.string().optional().describe("Stable worker ID."),
+            harness: tool.schema.string().optional().describe("pi, codex, claude, or opencode."),
+            role: tool.schema.string().optional().describe("Worker role or configured role preset."),
+            task: tool.schema.string().optional().describe("Assignment or standing mandate."),
+            cwd: tool.schema.string().optional().describe("Worker working directory."),
+            profile: tool.schema.string().optional().describe("Configured launch profile."),
+            model: tool.schema.string().optional().describe("Harness model identifier."),
+            effort: tool.schema.string().optional().describe("Normalized effort or OpenCode model variant."),
+            instructions: tool.schema.string().optional().describe("Additional standing instructions."),
+            fresh: tool.schema.boolean().optional().describe("Start a fresh persistent session rather than resume this worker ID."),
+            execute: tool.schema.boolean().optional().describe("Actually execute cleanup; false previews."),
+            lines: tool.schema.number().optional().describe("Journal lines for logs.")
+          },
+          async execute(args, context) {
+            setActiveSession(context.sessionID);
+            const result = await invokeAgentFleet(args, {
+              managerSessionId: runtimeIdentity.sessionId,
+              cwd: directory
+            });
+            return resultText(result);
+          }
+        })
+      } : {},
       intercom_whoami: tool({
         description: "Show this OpenCode session's intercom identity.",
         args: {},
@@ -2052,11 +2352,13 @@ This message expects a reply. Use intercom_reply with reply_to "${entry.message.
       }
       if (event.type === "session.idle") {
         activeSessionStatus = "idle";
+        healthReporter.update({ status: "idle", connected: true, error: void 0 });
         await runtime.setSummary("idle");
         await flushPendingInjectQueue("session.idle");
       } else if (event.type === "session.status") {
-        const status = typeof properties?.status === "string" ? properties.status : "active";
+        const status = normalizeOpenCodeSessionStatus(properties?.status);
         activeSessionStatus = status;
+        healthReporter.update({ status, connected: true, error: void 0 });
         await runtime.setSummary(status);
       }
     }

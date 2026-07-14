@@ -1,80 +1,70 @@
-# OpenCode Intercom Implementation Plan
+# OpenCode Intercom Architecture
 
 ## Goal
 
-Build an OpenCode-native intercom that interoperates with `pi-intercom`,
-`codex-intercom`, and `claude-intercom`, without starting with MCP or a full
-background-worker system.
+Provide OpenCode with the same durable Agent Intercom messaging and owned fleet lifecycle used by Pi, while using OpenCode's public plugin, session, and TUI APIs rather than patching the host.
 
-## Best First Architecture
+## Architecture
 
-Use an OpenCode plugin as the primary integration point.
+### Shared broker protocol
 
-- OpenCode plugins can define native custom tools, so MCP is unnecessary for the
-  first cut.
-- The plugin can register the current OpenCode session with the existing local
-  broker and expose the same tool names other agents already know.
-- The broker protocol stays unchanged: length-prefixed JSON over a local socket
-  under `~/.pi/agent/intercom` by default.
-- This preserves cross-agent compatibility while avoiding OpenCode-specific
-  orchestration decisions too early.
+The adapter uses the protocol-v3 broker shared by Pi, Codex, and Claude:
 
-## Phase 1: Message Protocol Only
+- local Unix socket or opt-in Windows loopback transport
+- receiver acknowledgements and delivery IDs
+- durable sender outbox
+- ask defer/cancel semantics
+- incompatible broker detection and replacement
 
-Implemented in this checkout as the starting point.
+### OpenCode server plugin
 
-- Vendor the shared broker/client/framing/socket path code.
-- Register an OpenCode session lazily on first intercom tool call.
-- Expose native OpenCode tools:
-  `intercom_whoami`, `intercom_status`, `intercom_list`,
-  `intercom_set_summary`, `intercom_send`, `intercom_ask`,
-  `intercom_pending`, and `intercom_reply`.
-- Queue inbound messages in plugin memory.
-- Track unresolved inbound asks so OpenCode can reply with `intercom_reply`.
-- Inject inbound messages into OpenCode best-effort: show a TUI toast, append and
-  submit the active prompt when a TUI is present, and fall back to session prompt
-  enqueueing when only an active session id is known.
-- Use OpenCode env vars for identity:
-  `OPENCODE_INTERCOM_NAME`, `OPENCODE_INTERCOM_SESSION_ID`, and
-  `OPENCODE_INTERCOM_MODEL`.
+The server plugin owns one Intercom identity and provides:
 
-## Phase 2: Better OpenCode Session Integration
+- `intercom_whoami`, `status`, `list`, `send`, `ask`, `pending`, and `reply`
+- durable inbound persistence before acknowledgement
+- prompt injection with `session.promptAsync`
+- session-history duplicate suppression
+- readiness and active-session health records
+- optional `agent_fleet` for an explicitly configured primary manager
 
-- Improve identity detection if OpenCode exposes stable session ids through the
-  plugin context or SDK client.
-- Publish richer status from OpenCode events when the event payload is stable.
-- Verify inbound TUI append/submit behavior in a long-lived interactive OpenCode
-  TUI. The non-interactive `opencode run` path receives and queues messages, but
-  does not stream prompts injected after the original run starts.
-- Add tests around plugin tool behavior with a mocked runtime.
+### TUI plugin
 
-## Phase 3: Background And Subagent Control
+The TUI plugin remains a separate OpenCode entry and communicates with the server plugin through the private local control bridge. It provides `/intercom`, `/intercom-id`, Alt+M, and Alt+I without registering a second broker identity.
 
-Add this only after Phase 1 is reliable.
+### Persistent worker ownership
 
-- Evaluate `opencode-agent-intercom` for direct subagent message injection,
-  status, and abort primitives.
-- Evaluate `opencode-background-agents` and `opencode-orchestrator` for longer
-  running wakeable-worker behavior.
-- Decide whether OpenCode workers should be daemon-managed like Claude `cci`, or
-  native subagent-managed through OpenCode's plugin/subagent APIs.
-- Keep the wire protocol compatible even if OpenCode gets richer local control.
+`agent-intercom-orchestrator` starts a private authenticated OpenCode server in an exact systemd user-service cgroup. A bootstrap run creates or resumes the OpenCode session. The plugin publishes health, and spawn succeeds only after the expected run ID is connected and has an active session.
 
-## Phase 4: Packaging
+The worker ID maps to durable session state. Reuse resumes; `fresh: true` resets intentionally.
 
-- Publish as `opencode-intercom` once the plugin API shape is verified against a
-  real OpenCode session.
-- Keep MCP out unless a concrete use case appears that native OpenCode tools do
-  not cover.
-- Add a small skill/command later only if it improves model behavior; do not make
-  the first version depend on extra prompt surface.
+### Manager parity
 
-## Open Questions
+The orchestrator package ships `agent-intercom-fleet`. This executable hosts the exact same extension tool in a minimal headless context. OpenCode's opt-in native `agent_fleet` tool invokes it with a stable manager-session ID.
 
-- Does OpenCode expose a stable current session id to plugins? If yes, prefer it
-  over the current env/id fallback.
-- Should inbound messages trigger a visible prompt append, a toast, or remain
-  pull-based through `intercom_pending`?
-- Should the initial npm package depend on `@opencode-ai/plugin`, or rely on
-  OpenCode providing it at runtime? The current package declares the dependency
-  and bundles everything else.
+No systemd/store logic is copied into the OpenCode adapter. Pi and OpenCode therefore share:
+
+- profiles and role presets
+- worker records and cross-process locks
+- leases and heartbeat ownership
+- adoption
+- readiness/session metadata
+- model and OpenCode variant enumeration
+- systemd cgroups and descendant verification
+- logs, stop, cleanup, and forget
+
+## Safety boundaries
+
+- Fleet management is off by default in OpenCode.
+- Owned workers suppress recursive fleet registration through `AGENT_INTERCOM_OWNED=1`.
+- Detached services, containers, and remote resources require explicit manager ownership.
+- Stop operations target exact orchestrator-owned units; broad process-name kills are forbidden.
+- Server authentication uses a random per-run loopback password.
+
+## Practical parity definition
+
+Parity means equivalent durable messaging, session continuity, lifecycle ownership, and manager tool operations. It does not mean identical host presentation:
+
+- Pi has native `/agents*` menus and a scoped footer.
+- OpenCode has native model-callable tools and separate server/TUI plugins.
+
+Both paths use one lifecycle backend and are expected to produce the same ownership and cleanup results.

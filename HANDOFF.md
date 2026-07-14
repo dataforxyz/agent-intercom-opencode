@@ -1,206 +1,80 @@
 # OpenCode Intercom Handoff
 
-## Repo
+## Current state
 
-`/home/dxyz/src/github.com/dataforxyz/agent-intercom-opencode`
+OpenCode now supports practical Pi parity for persistent coworker and primary-manager operations.
 
-## Current State
+Core files:
 
-The package exists and builds.
+- `opencode/plugin.ts` — native tools, prompt injection, health, model/session events
+- `opencode/runtime.ts` — broker identity, durable inbound lifecycle, asks/replies
+- `opencode/inbound-store.ts` — crash-safe inbound persistence and replay
+- `opencode/health.ts` — run-specific readiness and session health
+- `opencode/fleet.ts` — opt-in bridge to the shared orchestrator CLI
+- `opencode/tui.ts` — native TUI commands and shortcuts
 
-Important files:
+## Implemented
 
-- `opencode/plugin.ts`
-- `opencode/runtime.ts`
-- `README.md`
-- `PLAN.md`
-- `NEXT_STEPS.md`
+### Durable messaging
 
-Package status:
+- inbound messages are atomically persisted before broker acknowledgement
+- unfinished injection replays after reconnect or restart
+- unresolved asks remain durable until `intercom_reply` succeeds
+- prompt submissions carry `metadata.intercomMessageId` and a textual marker
+- replay checks recent session messages before submission to suppress crash-window duplicates
+- delivered IDs and known session IDs are bounded
+- sender outbox remains durable through the protocol-v3 broker client
 
-- `npm run build` passes
-- `npm test` passes (27 broker tests)
+### Persistent OpenCode peers
 
-## What Is Implemented
+The orchestrator launcher:
 
-OpenCode-native plugin tools:
+- starts an authenticated private-loopback `opencode serve`
+- bootstraps with `opencode run --pure --attach`
+- waits for plugin, Intercom, and OpenCode session readiness
+- records the active OpenCode session ID
+- resumes with `opencode run --session <id>` when the worker ID is reused
+- falls back to a fresh session if the saved session no longer exists
+- supports explicit `fresh: true`
 
-- `intercom_whoami`
-- `intercom_status`
-- `intercom_list`
-- `intercom_set_summary`
-- `intercom_send`
-- `intercom_ask`
-- `intercom_pending`
-- `intercom_reply`
+### OpenCode as manager
 
-Shared broker protocol:
+Set `OPENCODE_INTERCOM_FLEET=1` for exactly one primary OpenCode manager. The plugin registers native `agent_fleet`, which invokes the `agent-intercom-fleet` executable from `agent-intercom-orchestrator`.
 
-- vendored from the existing intercom repos
-- interoperates with Pi/Codex/Claude protocol
+This reuses the same worker store, leases, manager-session ownership, adoption, readiness, systemd cgroups, logs, stop verification, cleanup, models, and variants as Pi. Owned workers receive `AGENT_INTERCOM_OWNED=1` and suppress recursive fleet registration by default.
 
-Inbound handling:
+## Proven
 
-- plugin now auto-connects to broker on startup
-- inbound messages queue in runtime memory
-- inbound injection now has a proven headless run-mode path:
-  - show toast
-  - if real TUI is present, try `appendPrompt` + `submitPrompt`
-  - if the session is busy, use `session.promptAsync(...)` as the primary path
-  - if busy-path delivery was not confirmed, queue and flush on `session.idle`
-  - delivered message IDs are tracked so a message is injected at most once
-- plugin disconnects in `dispose`
+- persistent headless follow-up delivery through `session.promptAsync`
+- durable message and ask replay in tests
+- stable OpenCode session restart with retained memory
+- real Pi → OpenCode and OpenCode → Pi communication
+- real OpenCode manager `agent_fleet capabilities`
+- real OpenCode manager spawn → completed status → logs → cgroup verification → forget
+- model-specific OpenCode variant enumeration and pre-spawn rejection
 
-## Important Code Facts
+## Verification
 
-### `opencode/plugin.ts`
-
-- `runtime.connect()` is now called immediately on plugin startup
-- `activeSessionID` now has three sources:
-  1. `OPENCODE_SESSION_ID` if present
-  2. plugin tool/event context
-  3. fallback lookup of the newest OpenCode session in the current directory
-- debug logging is gated behind `OPENCODE_INTERCOM_DEBUG=1` and writes to
-  `/tmp/intercom-inject.log`
-- `injectInbound()` currently:
-  1. shows toast
-  2. uses TUI append/submit only when running with a real TTY
-  3. for busy sessions in headless/run mode, calls `session.promptAsync`
-  4. if that path does not confirm delivery, keeps a fallback queue
-  5. flushes queued fallback messages with `session.prompt` on `session.idle`
-  6. marks delivered message IDs so the same inbound message cannot inject twice
-
-### `opencode/runtime.ts`
-
-- `OpenCodeIntercomRuntime` accepts `onInboundMessage`
-- incoming broker messages call that hook
-- runtime still supports queued fallback via `intercom_pending`
-
-## What Has Been Proven
-
-### Proven
-
-- real `opencode run` loads the plugin
-- real `pi --print` loads `pi-intercom`
-- OpenCode tool calls work
-- Pi tool calls work
-- OpenCode can register on startup without calling an intercom tool first
-
-Strong proof:
-
-A fresh OpenCode receiver that did not call any intercom tool appeared in Pi's
-`intercom list` as `opencode-auto-listen-smoke`.
-
-That proves startup registration/listening works.
-
-## What Is Proven Now
-
-Run-mode wake after idle is now proven end-to-end.
-
-Specifically proven:
-
-1. Pi sends to a live long-lived OpenCode receiver while its original turn is
-   still busy.
-2. `session.promptAsync` receives the busy-time delivery attempt.
-3. The receiver completes its original `sleep` turn.
-4. The inbound prompt appears in `opencode export` as a real new user turn.
-5. The receiver produces exactly one injected inbound prompt turn for that
-   message.
-
-Strong proof:
-
-- `/tmp/intercom-inject.log` showed:
-  - `inject.promptAsync` with HTTP `204`
-  - `message.delivered` with path `session.promptAsync`
-- `opencode export` for the verified receiver session contained exactly one
-  inbound user message:
-  - `Incoming intercom message from subagent-chat-019f3fe5 ... exactly once proof from pi`
-
-That proves headless `opencode run` wake/injection can work.
-
-## Key Findings
-
-Important behavior discovered during debugging:
-
-- In headless `opencode run`, `tui.appendPrompt` / `tui.submitPrompt` can return
-  success without creating a durable exported turn.
-- For headless busy sessions, `session.promptAsync` is the correct primary path.
-- Queue-on-busy plus idle-flush is still useful as a fallback, but it must not
-  run for messages already confirmed delivered.
-- Delivered message IDs must be tracked to prevent double-injection.
-
-## Why Previous Test Went Sideways
-
-This was not always a plugin bug.
-
-At least one failed send was because the target session had already exited:
-
-- Pi tried to send to `opencode-auto-listen-smoke`
-- broker returned `Session not found`
-
-So some failures were just bad timing with short-lived `opencode run`
-receivers.
-
-Also, the previous assistant repeatedly issued empty `bash` calls. Ignore that;
-it was not evidence about the plugin.
-
-## Best Next Tests
-
-The most important run-mode proof is done. Remaining validation is now about UX
-and cleanup, not core feasibility.
-
-### Receiver
-
-Start a long-lived OpenCode run with plugin loaded and no intercom tool call
-required:
+Run:
 
 ```bash
-OPENCODE_CONFIG_CONTENT='{"$schema":"https://opencode.ai/config.json","plugin":["/home/dxyz/src/github.com/dataforxyz/agent-intercom-opencode/dist/plugin.mjs"],"permission":{"bash":"allow"}}' \
-OPENCODE_INTERCOM_NAME=opencode-live-test \
-OPENCODE_INTERCOM_SESSION_ID=opencode-live-test \
-opencode run --auto --format json "Run bash command sleep 120. Then output done. Do not call any intercom tools."
+npm install
+npm test
+npm run typecheck
+npm run build
 ```
 
-### Confirm It Registered
+The current feature work passes 49 adapter tests. Re-run the orchestrator suite separately because readiness, resume, variants, CLI hosting, and systemd ownership live there.
 
-From Pi or any intercom-capable session, list sessions and confirm
-`opencode-live-test` is present before sending.
+## Remaining harness-level differences
 
-### Send From Pi
+These are presentation differences, not missing ownership behavior:
 
-Use real Pi intercom send while receiver is definitely still alive.
+- Pi has a scoped footer and `/agents*` configuration menus.
+- OpenCode exposes fleet lifecycle as native model-callable tools.
+- OpenCode uses separate server and TUI plugin files.
+- Interactive TUI prompt rendering remains dependent on OpenCode's public TUI APIs; headless persistent delivery is the strongest verified path.
 
-### What To Inspect
+## Release dependency
 
-Useful things to validate next:
-
-- interactive TUI UX: toast + visible prompt append + auto-submit
-- reply flow from injected context with `intercom_reply` / `intercom_send`
-- whether any edge cases still need fallback flush if `promptAsync` fails
-
-Useful commands:
-
-- `opencode export <sessionID>`
-- inspect the long-lived receiver's JSON event stream/log
-- if needed, use `intercom_pending` inside the same OpenCode session to
-  separate "received but not injected" from "not received"
-
-## Remaining Gaps
-
-The main remaining gap is not core wakeup anymore. It is polish / broader UX:
-
-- verify the same behavior in a real interactive OpenCode TUI
-- verify reply-back flow from the injected turn
-- keep an eye on whether any provider/model combination behaves differently from
-  the verified `claude-fable-5` run-mode proof
-
-## Bottom Line
-
-Current status is:
-
-- protocol: working
-- startup registration: working
-- queueing: working
-- headless run-mode wake after idle: working and proven
-- exactly-once delivery for the verified busy-time `promptAsync` path: working
-- interactive TUI wake/reply UX: still worth validating
+The OpenCode fleet tool requires a matching `agent-intercom-orchestrator` release containing `agent-intercom-fleet`. Publish the adapter and orchestrator changes together.

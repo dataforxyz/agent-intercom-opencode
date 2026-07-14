@@ -5,6 +5,7 @@ import { cwd as processCwd } from "process";
 import { IntercomClient } from "../broker/client.ts";
 import { spawnBrokerIfNeeded } from "../broker/spawn.ts";
 import { getAskTimeoutMs, loadConfig } from "../config.ts";
+import { DurableInboundStore, getOpenCodeInboundStatePath, type DurableInboundEntry, type InboundDeliveryStore } from "./inbound-store.ts";
 import type { Attachment, Message, SessionInfo } from "../types.ts";
 
 export interface OpenCodeRuntimeIdentity {
@@ -15,13 +16,7 @@ export interface OpenCodeRuntimeIdentity {
   startedAt: number;
 }
 
-export interface PendingInboundMessage {
-  from: SessionInfo;
-  message: Message;
-  deliveryId: string;
-  receivedAt: number;
-  read: boolean;
-}
+export interface PendingInboundMessage extends DurableInboundEntry {}
 
 export type InboundMessageHandler = (entry: PendingInboundMessage) => void | Promise<void>;
 
@@ -46,7 +41,6 @@ function shortHash(value: string): string {
 
 export function buildOpenCodeRuntimeIdentity(env: NodeJS.ProcessEnv = process.env, cwd = env.PWD || processCwd(), pid = process.pid): OpenCodeRuntimeIdentity {
   const sessionId = env.OPENCODE_INTERCOM_SESSION_ID?.trim()
-    || env.OPENCODE_SESSION_ID?.trim()
     || `opencode-${pid}-${shortHash(cwd)}`;
   const cwdName = basename(cwd) || "workspace";
   const name = env.OPENCODE_INTERCOM_NAME?.trim()
@@ -131,10 +125,16 @@ export class OpenCodeIntercomRuntime {
   private unresolvedAsks = new Map<string, PendingInboundMessage>();
   private replyWaiters = new Map<string, ReplyWaiter>();
   private onInboundMessage?: InboundMessageHandler;
+  private inboundStore: InboundDeliveryStore;
 
-  constructor(identity?: OpenCodeRuntimeIdentity, cwd?: string, onInboundMessage?: InboundMessageHandler) {
+  constructor(identity?: OpenCodeRuntimeIdentity, cwd?: string, onInboundMessage?: InboundMessageHandler, inboundStore?: InboundDeliveryStore) {
     this.identity = identity ?? buildOpenCodeRuntimeIdentity(process.env, cwd);
     this.onInboundMessage = onInboundMessage;
+    this.inboundStore = inboundStore ?? new DurableInboundStore(
+      process.env.OPENCODE_INTERCOM_INBOUND_STATE?.trim() || getOpenCodeInboundStatePath(this.identity.sessionId),
+    );
+    this.unread = this.inboundStore.retainedEntries();
+    for (const entry of this.inboundStore.unresolvedAsks()) this.unresolvedAsks.set(entry.message.id, entry);
   }
 
   getIdentity(): OpenCodeRuntimeIdentity {
@@ -169,6 +169,11 @@ export class OpenCodeIntercomRuntime {
       status: "idle",
     }, this.identity.sessionId);
     this.client = client;
+    for (const entry of this.inboundStore.pendingInjection()) {
+      void Promise.resolve(this.onInboundMessage?.(entry)).catch((error) => {
+        console.error("Failed to replay durable inbound intercom message:", error);
+      });
+    }
     return client;
   }
 
@@ -194,17 +199,30 @@ export class OpenCodeIntercomRuntime {
     }
 
     const entry = { from, message, deliveryId, receivedAt: Date.now(), read: false };
+    const disposition = this.inboundStore.enqueue(entry);
+    if (disposition !== "new") {
+      this.client?.acknowledgeMessage(deliveryId);
+      return;
+    }
     this.unread.push(entry);
     if (message.expectsReply) {
       this.unresolvedAsks.set(message.id, entry);
     }
-    // A headless server may take many seconds to run the model turn. Acknowledge
-    // once the message is queued in this runtime so the broker does not evict the
-    // otherwise healthy receiver while OpenCode is still processing it.
+    // Persist before acknowledging. If OpenCode exits before prompt submission,
+    // connect() replays this record from the durable inbound store.
     this.client?.acknowledgeMessage(deliveryId);
     void Promise.resolve(this.onInboundMessage?.(entry)).catch((error) => {
       console.error("Failed to inject inbound intercom message:", error);
     });
+  }
+
+  markInboundInjected(messageId: string): void {
+    this.inboundStore.markInjected(messageId);
+  }
+
+  markInboundReplied(messageId: string): void {
+    this.inboundStore.markReplied(messageId);
+    this.unresolvedAsks.delete(messageId);
   }
 
   private waitForReply(from: string, replyTo: string, timeoutMs = getAskTimeoutMs(), signal?: AbortSignal): Promise<Message> {
@@ -301,7 +319,7 @@ export class OpenCodeIntercomRuntime {
     if (!result.delivered) {
       return textResult(`Message to "${to}" was not delivered: ${result.reason ?? "Session may not exist or has disconnected."}`, { ok: false, accepted: result.accepted, delivered: false, message_id: result.id, delivery_id: result.deliveryId, code: result.code, reason: result.reason }, true);
     }
-    if (replyTo) this.unresolvedAsks.delete(replyTo);
+    if (replyTo) this.markInboundReplied(replyTo);
     return textResult(`Message sent to ${to}.`, { ok: true, accepted: result.accepted, delivered: true, message_id: result.id, delivery_id: result.deliveryId, to });
   }
 

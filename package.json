@@ -28,7 +28,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepare": "npm run build",
-    "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/ownership.test.ts broker/paths.test.ts broker/spawn.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/runtime.test.ts opencode/tui.test.ts",
+    "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/ownership.test.ts broker/paths.test.ts broker/spawn.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/runtime.test.ts opencode/tui.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
