@@ -288,6 +288,22 @@ See also:
 - `NEXT_STEPS.md`
 - `PLAN.md`
 
+## Releasing
+
+Releases are automated from version tags. Update `package.json`, the lockfile when
+present, and `CHANGELOG.md` on `main`, then push an annotated tag that exactly
+matches the package version:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+The release workflow verifies that the tag points into `main`, runs typecheck,
+tests, and the build, publishes the public npm package with trusted OIDC
+provenance, and creates the GitHub Release. Existing npm versions and GitHub
+Releases are skipped safely when a workflow is rerun.
+
 ## License
 
 The current project is licensed under the [GNU Affero General Public License
