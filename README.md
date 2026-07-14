@@ -61,23 +61,23 @@ OpenCode now has operational parity for the behaviors that matter to a persisten
 
 The harnesses still present differently. Pi has native extension commands, a scoped footer, and `/agents` menus; OpenCode exposes equivalent lifecycle operations as model-callable tools and uses separate server/TUI plugins. This is a UI/API difference, not a separate ownership implementation.
 
-## Install From GitHub
+## Install
+
+Install the published package under OpenCode's configuration directory:
 
 ```bash
-git clone https://github.com/dataforxyz/agent-intercom-opencode.git
-cd agent-intercom-opencode
-npm install
-npm run build
+mkdir -p ~/.config/opencode
+cd ~/.config/opencode
+npm install @dataforxyz/agent-intercom-opencode
 ```
 
-Add the server plugin to your normal OpenCode config (usually
-`~/.config/opencode/opencode.json`):
+The packaged `dist` files are prebuilt. Add the server plugin to your normal OpenCode config (usually `~/.config/opencode/opencode.json`), replacing `/home/you` with your absolute home path:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "/path/to/agent-intercom-opencode/dist/plugin.mjs"
+    "/home/you/.config/opencode/node_modules/@dataforxyz/agent-intercom-opencode/dist/plugin.mjs"
   ]
 }
 ```
@@ -89,7 +89,7 @@ To add the native intercom picker and copy command, put the separate TUI plugin 
 {
   "$schema": "https://opencode.ai/tui.json",
   "plugin": [
-    "/path/to/agent-intercom-opencode/dist/tui.mjs"
+    "/home/you/.config/opencode/node_modules/@dataforxyz/agent-intercom-opencode/dist/tui.mjs"
   ]
 }
 ```
@@ -97,6 +97,8 @@ To add the native intercom picker and copy command, put the separate TUI plugin 
 OpenCode keeps server and TUI plugins in separate configuration files. Do not
 put `dist/tui.mjs` in `opencode.json`: the server plugin loader will reject it.
 Restart OpenCode after changing either config.
+
+For source development instead, clone the GitHub repository, run `npm install && npm run build`, and point both plugin entries at that checkout's `dist` files.
 
 The TUI plugin talks to the already-connected server plugin through a private
 local control bridge. It does not open another broker connection or register a
@@ -110,20 +112,18 @@ No wrapper alias is required for OpenCode as a worker: once both config files ar
 Install both Pi packages, then restart Pi or run `/reload`:
 
 ```bash
-pi install git:github.com/dataforxyz/agent-intercom-pi
-pi install git:github.com/dataforxyz/agent-intercom-orchestrator
+pi install npm:@dataforxyz/agent-intercom-pi
+pi install npm:@dataforxyz/agent-intercom-orchestrator
 ```
 
 Inside Pi, run `agent_fleet({ action: "doctor" })` to confirm this OpenCode plugin is visible in OpenCode's resolved configuration. The orchestrator Pi package provides the `agent_fleet` tool, `/agents*` commands, scoped footer, and bundled manager Agent Skill.
 
 ### Enable OpenCode as the primary fleet manager
 
-Install or link the orchestrator package so its `agent-intercom-fleet` executable is available:
+Install the orchestrator package globally so its `agent-intercom-fleet` executable is available:
 
 ```bash
-cd /path/to/agent-intercom-orchestrator
-npm install
-npm link
+npm install -g @dataforxyz/agent-intercom-orchestrator
 ```
 
 Then start the one OpenCode session that should own persistent coworker creation:
@@ -135,7 +135,7 @@ OPENCODE_INTERCOM_SESSION_ID=opencode-manager \
 opencode
 ```
 
-For a checkout without an npm link, point directly at the packaged CLI:
+For a source checkout instead, point directly at the packaged CLI:
 
 ```bash
 AGENT_INTERCOM_FLEET_COMMAND=/path/to/agent-intercom-orchestrator/src/agent-fleet-cli.mjs
