@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0 - 2026-07-14
+
+- Align the Agent Intercom family on one coordinated `0.9.0` release line.
+- No behavior change from the immediately preceding AGPL release.
+
 ## 0.3.0 - 2026-07-14
 
 - Change the current project license to `AGPL-3.0-or-later`. Previously published MIT versions remain under MIT, and original `pi-intercom` notices are preserved in `THIRD_PARTY_NOTICES.md`.
