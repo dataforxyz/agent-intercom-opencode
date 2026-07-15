@@ -411,7 +411,7 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
     tool: {
       ...(fleetManagementEnabled ? {
         agent_fleet: tool({
-          description: "Create, inspect, adopt, stop, and clean up systemd-owned Pi, Codex, Claude, and OpenCode coworkers. Enabled only for an explicitly configured primary OpenCode manager.",
+          description: "Create, inspect, adopt, stop, and clean up systemd-owned Pi, Codex, Claude, and OpenCode coworkers. Spawn/list results include direct Intercom targets; list/status default to this manager's workers. Enabled only for an explicitly configured primary OpenCode manager.",
           args: {
             action: tool.schema.string().describe("Fleet action: spawn, list, status, stop, cleanup, doctor, logs, renew, forget, adopt, capabilities, profiles, models, variants, or config."),
             id: tool.schema.string().optional().describe("Stable worker ID."),
@@ -424,6 +424,7 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
             effort: tool.schema.string().optional().describe("Normalized effort or OpenCode model variant."),
             instructions: tool.schema.string().optional().describe("Additional standing instructions."),
             fresh: tool.schema.boolean().optional().describe("Start a fresh persistent session rather than resume this worker ID."),
+            all: tool.schema.boolean().optional().describe("Include workers owned by other manager sessions for list/status diagnostics."),
             execute: tool.schema.boolean().optional().describe("Actually execute cleanup; false previews."),
             lines: tool.schema.number().optional().describe("Journal lines for logs."),
           },

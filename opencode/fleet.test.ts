@@ -16,14 +16,14 @@ test("OpenCode invokes the packaged fleet command with stable manager identity",
   const dir = await mkdtemp(join(tmpdir(), "opencode-agent-fleet-"));
   try {
     const command = join(dir, "fleet.mjs");
-    await writeFile(command, `#!/usr/bin/env node\nlet input="";for await(const chunk of process.stdin)input+=chunk;const request=JSON.parse(input);process.stdout.write(JSON.stringify({ok:true,result:{content:[{type:"text",text:request.managerSessionId+":"+request.params.action}]}}));\n`);
+    await writeFile(command, `#!/usr/bin/env node\nlet input="";for await(const chunk of process.stdin)input+=chunk;const request=JSON.parse(input);process.stdout.write(JSON.stringify({ok:true,result:{content:[{type:"text",text:request.managerSessionId+":"+request.params.action+":"+request.params.all}]}}));\n`);
     await chmod(command, 0o755);
     const result = await invokeAgentFleet(
-      { action: "capabilities" },
+      { action: "list", all: true },
       { managerSessionId: "opencode-manager-1", cwd: dir },
       { ...process.env, AGENT_INTERCOM_FLEET_COMMAND: command },
     );
-    assert.equal(result.content[0].text, "opencode-manager-1:capabilities");
+    assert.equal(result.content[0].text, "opencode-manager-1:list:true");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
