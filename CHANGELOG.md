@@ -2,7 +2,10 @@
 
 ## Unreleased
 
+## 0.9.3 - 2026-07-15
+
 - Expose the orchestrator's manager-scoped fleet listing and explicit `all` diagnostics option through the native OpenCode `agent_fleet` bridge.
+- Coordinate the Agent Intercom family on the `0.9.3` release line.
 
 ## 0.9.2 - 2026-07-14
 

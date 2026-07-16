@@ -1,6 +1,6 @@
 {
   "name": "@dataforxyz/agent-intercom-opencode",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "OpenCode plugin for direct local messaging with Pi, Codex, Claude, and OpenCode coding-agent sessions.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
