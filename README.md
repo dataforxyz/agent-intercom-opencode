@@ -167,7 +167,9 @@ uses `wl-copy`, `xclip`, or `xsel`; macOS uses `pbcopy`, and Windows uses
 - `intercom_send`: send a non-blocking message
 - `intercom_ask`: send a question and wait briefly for the target's reply
 - `intercom_pending`: read queued inbound messages and unresolved asks
-- `intercom_reply`: reply to a pending inbound ask
+- `intercom_reply`: reply to a pending inbound ask; use `to` plus `which: "oldest" | "latest"` if one sender has multiple unresolved asks
+
+Pending output never exposes protocol message IDs. Keep at most one unresolved `intercom_ask` to the same recipient; the broker rejects a second ask and recommends `intercom_send` for a non-blocking follow-up.
 - `agent_fleet` *(opt-in manager only)*: create, inspect, adopt, renew, stop, and clean up owned coworkers; inspect coordinated adapter versions and preview or execute source-aware updates using the same implementation as Pi
 
 ## Inbound Delivery Model

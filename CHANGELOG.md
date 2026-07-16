@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add ID-free `oldest`/`latest` selection for multiple pending asks from one sender, hide protocol IDs from pending output, and refuse a second unresolved ask to the same recipient.
+
 ## 0.10.0 - 2026-07-16
 
 - Add `intercom_team` for adoption-safe manager and same-manager coworker discovery.

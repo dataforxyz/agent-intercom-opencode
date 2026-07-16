@@ -103,7 +103,7 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
   function formatInboundPrompt(entry: PendingInboundMessage): string {
     const from = entry.from.name || entry.from.id;
     const replyHint = entry.message.expectsReply
-      ? `\n\nThis message expects a reply. Use intercom_reply with reply_to "${entry.message.id}" after you respond.`
+      ? "\n\nThis message expects a reply. Use intercom_reply with only your reply text while this turn is active. If you reply later, use intercom_pending plus the sender and oldest/latest selector."
       : "";
     return [
       `Incoming intercom message from ${from} (${entry.from.model}, ${entry.from.cwd}):`,
@@ -528,15 +528,15 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
       }),
 
       intercom_reply: tool({
-        description: "Reply to a pending inbound intercom ask.",
+        description: "Reply to a pending inbound intercom ask. Use to plus which=oldest/latest when one sender has multiple unresolved asks.",
         args: {
           message: tool.schema.string().describe("Reply text."),
-          to: tool.schema.string().optional().describe("Optional sender name/id if there are multiple pending asks."),
-          reply_to: tool.schema.string().optional().describe("Optional message id from intercom_pending."),
+          to: tool.schema.string().optional().describe("Optional sender name/id; never a message or thread ID."),
+          which: tool.schema.enum(["oldest", "latest"]).optional().describe("Select the oldest or latest ask from the chosen sender."),
         },
         async execute(args, context) {
           setActiveSession(context.sessionID);
-          return resultText(await runtime.reply(args.message, args.to, args.reply_to));
+          return resultText(await runtime.reply(args.message, args.to, args.which));
         },
       }),
     },
