@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 - 2026-07-16
 
 - Add `intercom_team` for adoption-safe manager and same-manager coworker discovery.
 - Expose orchestrator `versions` and source-aware `update` actions through the native OpenCode fleet bridge.
