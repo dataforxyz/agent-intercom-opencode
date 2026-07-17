@@ -1154,7 +1154,7 @@ function isBrokerHealthOkMessage(message, requestId) {
     return false;
   }
   const response = message;
-  if (response.type !== "health_ok" || response.requestId !== requestId || response.protocol !== INTERCOM_PROTOCOL_NAME || response.version !== INTERCOM_PROTOCOL_VERSION) return false;
+  if (response.type !== "health_ok" || response.requestId !== requestId || response.protocol !== INTERCOM_PROTOCOL_NAME || response.version !== INTERCOM_PROTOCOL_VERSION || response.endpoint !== "local") return false;
   const remoteAccess = response.remoteAccess;
   if (typeof remoteAccess !== "object" || remoteAccess === null || Array.isArray(remoteAccess)) return false;
   const contract = remoteAccess;

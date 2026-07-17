@@ -1200,6 +1200,7 @@ var IntercomBroker = class {
         requestId: clientMessage.requestId,
         protocol: INTERCOM_PROTOCOL_NAME,
         version: INTERCOM_PROTOCOL_VERSION,
+        endpoint: origin,
         remoteAccess: this.remoteAccessContract()
       });
       return;
