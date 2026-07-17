@@ -23,7 +23,7 @@ var remoteManager = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "local-root",
   rootSessionId: "local-root"
 };
@@ -32,7 +32,7 @@ var remoteChild = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "remote-manager",
   rootSessionId: "local-root"
 };
@@ -41,7 +41,7 @@ var remoteSibling = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "remote-manager",
   rootSessionId: "local-root"
 };
@@ -74,16 +74,16 @@ var POLICY_VECTORS = [
     expectedReasonOrCode: "direct-parent"
   },
   {
-    name: "remote child cannot skip its direct parent in phase zero",
+    name: "remote child can reach its local root through the ancestor chain",
     principals: [localRoot, remoteManager, remoteChild],
     actorId: "remote-child",
     action: "send",
     targetId: "local-root",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-chain"
   },
   {
-    name: "remote siblings cannot communicate in phase zero",
+    name: "remote siblings cannot communicate in phase one",
     principals: [localRoot, remoteManager, remoteChild, remoteSibling],
     actorId: "remote-child",
     action: "discover",
@@ -108,6 +108,33 @@ var POLICY_VECTORS = [
     targetId: "local-peer",
     expectedAllowed: false,
     expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote manager may inspect its descendant subtree",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-manager",
+    action: "inspect_tree",
+    targetId: "remote-child",
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-control"
+  },
+  {
+    name: "remote child cannot revoke its ancestor",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-child",
+    action: "revoke",
+    targetId: "remote-manager",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote principal may request attenuated delegation under itself",
+    principals: [localRoot, remoteManager],
+    actorId: "remote-manager",
+    action: "delegate_child",
+    targetId: "remote-manager",
+    expectedAllowed: true,
+    expectedReasonOrCode: "self"
   },
   {
     name: "revoked principal cannot communicate",

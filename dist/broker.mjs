@@ -5,14 +5,27 @@ import { join as join2 } from "path";
 import { randomUUID as randomUUID3 } from "crypto";
 
 // node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
-var POLICY_SEMANTICS_VERSION = 1;
+var POLICY_SEMANTICS_VERSION = 2;
 function activePrincipal(state, id) {
   return state.principals[id];
 }
 function isDirectParentPair(left, right) {
   return left.parentSessionId === right.id || right.parentSessionId === left.id;
 }
-function authorize(state, actorId, _action, targetId, context = {}) {
+function isAncestor(state, ancestorId, descendantId) {
+  if (ancestorId === descendantId)
+    return false;
+  const visited = /* @__PURE__ */ new Set();
+  let current = state.principals[descendantId];
+  while (current?.parentSessionId && !visited.has(current.id)) {
+    if (current.parentSessionId === ancestorId)
+      return true;
+    visited.add(current.id);
+    current = state.principals[current.parentSessionId];
+  }
+  return false;
+}
+function authorize(state, actorId, action, targetId, context = {}) {
   const actor = activePrincipal(state, actorId);
   const target = activePrincipal(state, targetId);
   if (!actor || !target)
@@ -26,8 +39,17 @@ function authorize(state, actorId, _action, targetId, context = {}) {
     return { allowed: true, reason: "self" };
   if (actor.kind === "local" && target.kind === "local")
     return { allowed: true, reason: "local-public" };
-  if (isDirectParentPair(actor, target))
-    return { allowed: true, reason: "direct-parent" };
+  if (action === "discover" || action === "send" || action === "ask" || action === "reply") {
+    if (isDirectParentPair(actor, target))
+      return { allowed: true, reason: "direct-parent" };
+    if (isAncestor(state, actor.id, target.id) || isAncestor(state, target.id, actor.id)) {
+      return { allowed: true, reason: "ancestor-chain" };
+    }
+  }
+  if (action === "inspect_tree" || action === "revoke" || action === "adopt") {
+    if (isAncestor(state, actor.id, target.id))
+      return { allowed: true, reason: "ancestor-control" };
+  }
   return { allowed: false, code: "POLICY_DENIED" };
 }
 
@@ -53,7 +75,7 @@ var remoteManager = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "local-root",
   rootSessionId: "local-root"
 };
@@ -62,7 +84,7 @@ var remoteChild = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "remote-manager",
   rootSessionId: "local-root"
 };
@@ -71,7 +93,7 @@ var remoteSibling = {
   kind: "remote",
   state: "active",
   generation: 1,
-  policy: "remote-parent",
+  policy: "remote-tree",
   parentSessionId: "remote-manager",
   rootSessionId: "local-root"
 };
@@ -104,16 +126,16 @@ var POLICY_VECTORS = [
     expectedReasonOrCode: "direct-parent"
   },
   {
-    name: "remote child cannot skip its direct parent in phase zero",
+    name: "remote child can reach its local root through the ancestor chain",
     principals: [localRoot, remoteManager, remoteChild],
     actorId: "remote-child",
     action: "send",
     targetId: "local-root",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-chain"
   },
   {
-    name: "remote siblings cannot communicate in phase zero",
+    name: "remote siblings cannot communicate in phase one",
     principals: [localRoot, remoteManager, remoteChild, remoteSibling],
     actorId: "remote-child",
     action: "discover",
@@ -140,6 +162,33 @@ var POLICY_VECTORS = [
     expectedReasonOrCode: "POLICY_DENIED"
   },
   {
+    name: "remote manager may inspect its descendant subtree",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-manager",
+    action: "inspect_tree",
+    targetId: "remote-child",
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-control"
+  },
+  {
+    name: "remote child cannot revoke its ancestor",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-child",
+    action: "revoke",
+    targetId: "remote-manager",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote principal may request attenuated delegation under itself",
+    principals: [localRoot, remoteManager],
+    actorId: "remote-manager",
+    action: "delegate_child",
+    targetId: "remote-manager",
+    expectedAllowed: true,
+    expectedReasonOrCode: "self"
+  },
+  {
     name: "revoked principal cannot communicate",
     principals: [localRoot, { ...remoteManager, state: "revoked" }],
     actorId: "remote-manager",
@@ -159,7 +208,7 @@ var POLICY_VECTORS = [
     expectedReasonOrCode: "STALE_GENERATION"
   }
 ];
-var POLICY_SEMANTICS_HASH = "78178a5fd57c353342642968d3a27262ed02cb236927723675d875959413dce3";
+var POLICY_SEMANTICS_HASH = "f3b00e503631bc91123aedfbcf1df72cc9913e1893c09728b2c598f3dcdfdfe0";
 
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
@@ -408,7 +457,7 @@ function hasBrokerOwnership(path, pid = process.pid) {
 // broker/access-registry.ts
 import { createHash, randomBytes, randomUUID as randomUUID2, timingSafeEqual } from "crypto";
 import { existsSync, readFileSync as readFileSync3 } from "fs";
-var REMOTE_ACCESS_STATE_VERSION = 1;
+var REMOTE_ACCESS_STATE_VERSION = 2;
 var REMOTE_ACCESS_CREDENTIAL_VERSION = 1;
 var DEFAULT_ENROLLMENT_TTL_MS = 10 * 60 * 1e3;
 var DEFAULT_PRINCIPAL_TTL_MS = 30 * 24 * 60 * 60 * 1e3;
@@ -441,14 +490,59 @@ function requireText(value, field, maxLength = 512) {
   }
   return normalized;
 }
+function boundedInteger(value, fallback, field, minimum, maximum) {
+  const resolved = value ?? fallback;
+  if (!Number.isSafeInteger(resolved) || resolved < minimum || resolved > maximum) throw new Error(`Invalid ${field}`);
+  return resolved;
+}
 function parseState(raw) {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("expected object");
   const state = raw;
-  if (state.version !== REMOTE_ACCESS_STATE_VERSION) throw new Error("unsupported version");
+  if (state.version !== 1 && state.version !== REMOTE_ACCESS_STATE_VERSION) throw new Error("unsupported version");
   if (typeof state.principals !== "object" || state.principals === null || Array.isArray(state.principals)) throw new Error("invalid principals");
   if (typeof state.enrollments !== "object" || state.enrollments === null || Array.isArray(state.enrollments)) throw new Error("invalid enrollments");
   if (state.adminCredentialHash !== void 0 && typeof state.adminCredentialHash !== "string") throw new Error("invalid admin credential hash");
-  return raw;
+  const principals = {};
+  for (const [id, value] of Object.entries(state.principals)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`invalid principal ${id}`);
+    const principal = value;
+    if (principal.id !== id || typeof principal.name !== "string" || typeof principal.credentialHash !== "string" || typeof principal.parentSessionId !== "string" || typeof principal.rootSessionId !== "string" || typeof principal.remoteHostId !== "string" || typeof principal.generation !== "number" || principal.state !== "active" && principal.state !== "revoked" || typeof principal.expiresAt !== "number" || typeof principal.createdAt !== "number" || typeof principal.updatedAt !== "number") throw new Error(`invalid principal ${id}`);
+    const depth = boundedInteger(principal.depth, 1, "principal depth", 1, 32);
+    const maxDepth = boundedInteger(principal.maxDepth, depth, "maximum delegation depth", depth, 32);
+    const maxChildren = boundedInteger(principal.maxChildren, 0, "maximum child count", 0, 128);
+    principals[id] = {
+      ...principal,
+      policy: "remote-tree",
+      canDelegate: principal.canDelegate === true,
+      depth,
+      maxDepth,
+      maxChildren
+    };
+  }
+  const enrollments = {};
+  for (const [hash, value] of Object.entries(state.enrollments)) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`invalid enrollment ${hash}`);
+    const enrollment = value;
+    const template = enrollment.template;
+    if (!template || typeof template !== "object") throw new Error(`invalid enrollment ${hash}`);
+    const depth = boundedInteger(template.depth, 1, "enrollment depth", 1, 32);
+    enrollments[hash] = {
+      ...enrollment,
+      template: {
+        ...template,
+        canDelegate: template.canDelegate === true,
+        depth,
+        maxDepth: boundedInteger(template.maxDepth, depth, "enrollment maximum depth", depth, 32),
+        maxChildren: boundedInteger(template.maxChildren, 0, "enrollment maximum children", 0, 128)
+      }
+    };
+  }
+  return {
+    version: REMOTE_ACCESS_STATE_VERSION,
+    ...typeof state.adminCredentialHash === "string" ? { adminCredentialHash: state.adminCredentialHash } : {},
+    principals,
+    enrollments
+  };
 }
 var RemoteAccessRegistry = class {
   constructor(statePath, now = Date.now) {
@@ -492,17 +586,59 @@ var RemoteAccessRegistry = class {
     const expiresAt = now + ttlMs;
     const principalExpiresAt = template.expiresAt ?? now + DEFAULT_PRINCIPAL_TTL_MS;
     if (!Number.isSafeInteger(principalExpiresAt) || principalExpiresAt <= now) throw new Error("Invalid principal expiry");
+    const depth = boundedInteger(template.depth, 1, "principal depth", 1, 32);
+    const maxDepth = boundedInteger(template.maxDepth, depth, "maximum delegation depth", depth, 32);
+    const maxChildren = boundedInteger(template.maxChildren, 0, "maximum child count", 0, 128);
+    const canDelegate = template.canDelegate === true;
+    if (canDelegate && (maxDepth <= depth || maxChildren === 0)) throw new Error("Delegating principals require remaining depth and child capacity");
     const normalized = {
       name: requireText(template.name, "principal name", 256),
       parentSessionId: requireText(template.parentSessionId, "parent session ID"),
       rootSessionId: requireText(template.rootSessionId, "root session ID"),
       remoteHostId: requireText(template.remoteHostId, "remote host ID", 256),
-      expiresAt: principalExpiresAt
+      expiresAt: principalExpiresAt,
+      canDelegate,
+      depth,
+      maxDepth,
+      maxChildren
     };
     this.pruneExpiredEnrollments(now);
     this.state.enrollments[tokenHash] = { tokenHash, template: normalized, expiresAt, createdAt: now };
     this.persist();
     return { enrollmentToken, expiresAt };
+  }
+  issueChildEnrollment(parentSessionId, parentGeneration, request, ttlMs = DEFAULT_ENROLLMENT_TTL_MS) {
+    const parent = this.validatePrincipal(parentSessionId, parentGeneration);
+    if (!parent.canDelegate) throw new RemoteAccessError("INVALID_ENROLLMENT", "Parent principal cannot delegate children");
+    const now = this.now();
+    const activeChildren = Object.values(this.state.principals).filter(
+      (principal) => principal.parentSessionId === parent.id && principal.state === "active" && principal.expiresAt > now
+    ).length;
+    const pendingChildren = Object.values(this.state.enrollments).filter(
+      (enrollment) => enrollment.template.parentSessionId === parent.id && enrollment.expiresAt > now
+    ).length;
+    if (activeChildren + pendingChildren >= parent.maxChildren) throw new RemoteAccessError("INVALID_ENROLLMENT", "Parent child limit is exhausted");
+    const depth = parent.depth + 1;
+    if (depth > parent.maxDepth) throw new RemoteAccessError("INVALID_ENROLLMENT", "Parent delegation depth is exhausted");
+    const maxDepth = boundedInteger(request.maxDepth, depth, "child maximum depth", depth, parent.maxDepth);
+    const maxChildren = boundedInteger(request.maxChildren, 0, "child maximum count", 0, parent.maxChildren);
+    const canDelegate = request.canDelegate === true;
+    if (canDelegate && (maxDepth <= depth || maxChildren === 0)) throw new Error("Delegating child requires remaining depth and child capacity");
+    const expiresAt = request.expiresAt ?? parent.expiresAt;
+    if (!Number.isSafeInteger(expiresAt) || expiresAt <= this.now() || expiresAt > parent.expiresAt) {
+      throw new Error("Child expiry must not exceed the parent expiry");
+    }
+    return this.issueEnrollment({
+      name: request.name,
+      parentSessionId: parent.id,
+      rootSessionId: parent.rootSessionId,
+      remoteHostId: parent.remoteHostId,
+      expiresAt,
+      canDelegate,
+      depth,
+      maxDepth,
+      maxChildren
+    }, ttlMs);
   }
   consumeEnrollment(enrollmentToken) {
     const now = this.now();
@@ -524,7 +660,11 @@ var RemoteAccessRegistry = class {
       rootSessionId: enrollment.template.rootSessionId,
       remoteHostId: enrollment.template.remoteHostId,
       generation: 1,
-      policy: "remote-parent",
+      policy: "remote-tree",
+      canDelegate: enrollment.template.canDelegate === true,
+      depth: enrollment.template.depth,
+      maxDepth: enrollment.template.maxDepth,
+      maxChildren: enrollment.template.maxChildren,
       state: "active",
       expiresAt: enrollment.template.expiresAt,
       createdAt: now,
@@ -600,7 +740,7 @@ function policyPrincipalForSession(session) {
       kind: "remote",
       state: "active",
       generation: session.generation,
-      policy: "remote-parent",
+      policy: "remote-tree",
       parentSessionId: session.parentSessionId,
       rootSessionId: session.rootSessionId
     };
@@ -992,12 +1132,13 @@ var IntercomBroker = class {
       return;
     }
     if (clientMessage.type === "access_control") {
-      if (origin !== "local" || currentId !== null) {
-        this.sendError(socket, "ACCESS_DENIED", "Remote access control is unavailable on this connection");
+      if (currentId !== null) {
+        this.sendError(socket, "ACCESS_DENIED", "Remote access control requires a short-lived control connection");
         socket.end();
         return;
       }
-      this.handleAccessControl(socket, clientMessage);
+      if (origin === "local") this.handleAccessControl(socket, clientMessage);
+      else this.handleRemoteAccessControl(socket, clientMessage);
       return;
     }
     if (requiresEndpointAuth && clientMessage.type === "register" && !hasEndpointAuth) {
@@ -1113,7 +1254,11 @@ var IntercomBroker = class {
           remoteHostId: remotePrincipal.remoteHostId,
           parentSessionId: remotePrincipal.parentSessionId,
           rootSessionId: remotePrincipal.rootSessionId,
-          generation: remotePrincipal.generation
+          generation: remotePrincipal.generation,
+          canDelegate: remotePrincipal.canDelegate,
+          depth: remotePrincipal.depth,
+          maxDepth: remotePrincipal.maxDepth,
+          maxChildren: remotePrincipal.maxChildren
         } : {
           id,
           ...session.name !== void 0 ? { name: session.name } : {},
@@ -1162,6 +1307,10 @@ var IntercomBroker = class {
               parentSessionId: remotePrincipal.parentSessionId,
               rootSessionId: remotePrincipal.rootSessionId,
               generation: remotePrincipal.generation,
+              canDelegate: remotePrincipal.canDelegate,
+              depth: remotePrincipal.depth,
+              maxDepth: remotePrincipal.maxDepth,
+              maxChildren: remotePrincipal.maxChildren,
               ...issuedSessionCredential ? { sessionCredential: issuedSessionCredential } : {}
             }
           } : {}
@@ -1514,7 +1663,7 @@ var IntercomBroker = class {
       return;
     }
     const enrollment = message.enrollment;
-    if (typeof enrollment.name !== "string" || typeof enrollment.parentSessionId !== "string" || typeof enrollment.rootSessionId !== "string" || typeof enrollment.remoteHostId !== "string" || enrollment.ttlMs !== void 0 && (typeof enrollment.ttlMs !== "number" || !Number.isSafeInteger(enrollment.ttlMs)) || enrollment.expiresAt !== void 0 && (typeof enrollment.expiresAt !== "number" || !Number.isSafeInteger(enrollment.expiresAt))) {
+    if (typeof enrollment.name !== "string" || typeof enrollment.parentSessionId !== "string" || typeof enrollment.rootSessionId !== "string" || typeof enrollment.remoteHostId !== "string" || enrollment.ttlMs !== void 0 && (typeof enrollment.ttlMs !== "number" || !Number.isSafeInteger(enrollment.ttlMs)) || enrollment.expiresAt !== void 0 && (typeof enrollment.expiresAt !== "number" || !Number.isSafeInteger(enrollment.expiresAt)) || enrollment.canDelegate !== void 0 && typeof enrollment.canDelegate !== "boolean" || enrollment.maxDepth !== void 0 && (typeof enrollment.maxDepth !== "number" || !Number.isSafeInteger(enrollment.maxDepth)) || enrollment.maxChildren !== void 0 && (typeof enrollment.maxChildren !== "number" || !Number.isSafeInteger(enrollment.maxChildren))) {
       this.sendError(socket, "INVALID_REQUEST", "Invalid remote enrollment request");
       socket.end();
       return;
@@ -1530,7 +1679,10 @@ var IntercomBroker = class {
       parentSessionId: parent.info.id,
       rootSessionId: parent.info.id,
       remoteHostId: enrollment.remoteHostId,
-      ...enrollment.expiresAt !== void 0 ? { expiresAt: enrollment.expiresAt } : {}
+      ...enrollment.expiresAt !== void 0 ? { expiresAt: enrollment.expiresAt } : {},
+      ...enrollment.canDelegate !== void 0 ? { canDelegate: enrollment.canDelegate } : {},
+      ...enrollment.maxDepth !== void 0 ? { maxDepth: enrollment.maxDepth } : {},
+      ...enrollment.maxChildren !== void 0 ? { maxChildren: enrollment.maxChildren } : {}
     }, enrollment.ttlMs);
     this.audit.record({
       event: "enrollment_issued",
@@ -1546,6 +1698,82 @@ var IntercomBroker = class {
       action: "issue_enrollment",
       enrollmentToken: issued.enrollmentToken,
       expiresAt: issued.expiresAt
+    });
+    socket.end();
+  }
+  handleRemoteAccessControl(socket, message) {
+    if (typeof message.requestId !== "string" || message.requestId.length > MAX_MESSAGE_ID_LENGTH || message.action !== "issue_child_enrollment" || typeof message.access !== "object" || message.access === null || Array.isArray(message.access) || typeof message.enrollment !== "object" || message.enrollment === null || Array.isArray(message.enrollment)) {
+      this.sendError(socket, "ACCESS_DENIED", "Remote delegation request was rejected");
+      socket.end();
+      return;
+    }
+    const access = message.access;
+    const enrollment = message.enrollment;
+    if (typeof access.sessionCredential !== "string" || typeof access.sessionId !== "string" || typeof access.generation !== "number" || !Number.isSafeInteger(access.generation) || typeof enrollment.name !== "string" || enrollment.ttlMs !== void 0 && (typeof enrollment.ttlMs !== "number" || !Number.isSafeInteger(enrollment.ttlMs)) || enrollment.expiresAt !== void 0 && (typeof enrollment.expiresAt !== "number" || !Number.isSafeInteger(enrollment.expiresAt)) || enrollment.canDelegate !== void 0 && typeof enrollment.canDelegate !== "boolean" || enrollment.maxDepth !== void 0 && (typeof enrollment.maxDepth !== "number" || !Number.isSafeInteger(enrollment.maxDepth)) || enrollment.maxChildren !== void 0 && (typeof enrollment.maxChildren !== "number" || !Number.isSafeInteger(enrollment.maxChildren))) {
+      this.sendError(socket, "ACCESS_DENIED", "Remote delegation credential or request was rejected");
+      socket.end();
+      return;
+    }
+    let parent;
+    try {
+      parent = this.accessRegistry.authenticateSession(access.sessionId, access.generation, access.sessionCredential);
+    } catch {
+      this.audit.tryRecord({ event: "remote_registration_denied", outcome: "denied", reason: "INVALID_DELEGATION_CREDENTIAL" });
+      this.sendError(socket, "ACCESS_DENIED", "Remote delegation credential was rejected");
+      socket.end();
+      return;
+    }
+    const principal = {
+      id: parent.id,
+      kind: "remote",
+      state: "active",
+      generation: parent.generation,
+      policy: "remote-tree",
+      parentSessionId: parent.parentSessionId,
+      rootSessionId: parent.rootSessionId
+    };
+    const delegation = authorize(
+      { principals: { [parent.id]: principal } },
+      parent.id,
+      "delegate_child",
+      parent.id,
+      { actorGeneration: parent.generation, targetGeneration: parent.generation }
+    );
+    if (!delegation.allowed) {
+      this.sendError(socket, "ACCESS_DENIED", "Remote delegation policy denied the request");
+      socket.end();
+      return;
+    }
+    let issued;
+    try {
+      issued = this.accessRegistry.issueChildEnrollment(parent.id, parent.generation, {
+        name: enrollment.name,
+        ...enrollment.expiresAt !== void 0 ? { expiresAt: enrollment.expiresAt } : {},
+        ...enrollment.canDelegate !== void 0 ? { canDelegate: enrollment.canDelegate } : {},
+        ...enrollment.maxDepth !== void 0 ? { maxDepth: enrollment.maxDepth } : {},
+        ...enrollment.maxChildren !== void 0 ? { maxChildren: enrollment.maxChildren } : {}
+      }, enrollment.ttlMs);
+    } catch {
+      this.sendError(socket, "ACCESS_DENIED", "Remote delegation limits denied the request");
+      socket.end();
+      return;
+    }
+    this.audit.record({
+      event: "enrollment_issued",
+      outcome: "allowed",
+      actorId: parent.id,
+      targetId: enrollment.name,
+      remoteHostId: parent.remoteHostId,
+      generation: parent.generation,
+      reason: `delegated-expires:${issued.expiresAt}`
+    });
+    writeMessage(socket, {
+      type: "access_control_result",
+      requestId: message.requestId,
+      action: "issue_child_enrollment",
+      enrollmentToken: issued.enrollmentToken,
+      expiresAt: issued.expiresAt,
+      parentSessionId: parent.id
     });
     socket.end();
   }
