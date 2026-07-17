@@ -13,6 +13,166 @@ import { EventEmitter } from "events";
 import net from "net";
 import { randomUUID as randomUUID2 } from "crypto";
 
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
+var POLICY_SEMANTICS_VERSION = 2;
+
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
+var localRoot = {
+  id: "local-root",
+  kind: "local",
+  state: "active",
+  generation: 1,
+  policy: "local-public",
+  rootSessionId: "local-root"
+};
+var localPeer = {
+  id: "local-peer",
+  kind: "local",
+  state: "active",
+  generation: 1,
+  policy: "local-public",
+  rootSessionId: "local-peer"
+};
+var remoteManager = {
+  id: "remote-manager",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-tree",
+  parentSessionId: "local-root",
+  rootSessionId: "local-root"
+};
+var remoteChild = {
+  id: "remote-child",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-tree",
+  parentSessionId: "remote-manager",
+  rootSessionId: "local-root"
+};
+var remoteSibling = {
+  id: "remote-sibling",
+  kind: "remote",
+  state: "active",
+  generation: 1,
+  policy: "remote-tree",
+  parentSessionId: "remote-manager",
+  rootSessionId: "local-root"
+};
+var POLICY_VECTORS = [
+  {
+    name: "local sessions remain public",
+    principals: [localRoot, localPeer],
+    actorId: "local-root",
+    action: "send",
+    targetId: "local-peer",
+    expectedAllowed: true,
+    expectedReasonOrCode: "local-public"
+  },
+  {
+    name: "remote manager can reach direct local parent",
+    principals: [localRoot, remoteManager],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: true,
+    expectedReasonOrCode: "direct-parent"
+  },
+  {
+    name: "local parent can reach direct remote child",
+    principals: [localRoot, remoteManager],
+    actorId: "local-root",
+    action: "ask",
+    targetId: "remote-manager",
+    expectedAllowed: true,
+    expectedReasonOrCode: "direct-parent"
+  },
+  {
+    name: "remote child can reach its local root through the ancestor chain",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-child",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-chain"
+  },
+  {
+    name: "remote siblings cannot communicate in phase one",
+    principals: [localRoot, remoteManager, remoteChild, remoteSibling],
+    actorId: "remote-child",
+    action: "discover",
+    targetId: "remote-sibling",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "unrelated local session cannot discover remote principal",
+    principals: [localRoot, localPeer, remoteManager],
+    actorId: "local-peer",
+    action: "discover",
+    targetId: "remote-manager",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote principal cannot reach unrelated local session",
+    principals: [localRoot, localPeer, remoteManager],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-peer",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote manager may inspect its descendant subtree",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-manager",
+    action: "inspect_tree",
+    targetId: "remote-child",
+    expectedAllowed: true,
+    expectedReasonOrCode: "ancestor-control"
+  },
+  {
+    name: "remote child cannot revoke its ancestor",
+    principals: [localRoot, remoteManager, remoteChild],
+    actorId: "remote-child",
+    action: "revoke",
+    targetId: "remote-manager",
+    expectedAllowed: false,
+    expectedReasonOrCode: "POLICY_DENIED"
+  },
+  {
+    name: "remote principal may request attenuated delegation under itself",
+    principals: [localRoot, remoteManager],
+    actorId: "remote-manager",
+    action: "delegate_child",
+    targetId: "remote-manager",
+    expectedAllowed: true,
+    expectedReasonOrCode: "self"
+  },
+  {
+    name: "revoked principal cannot communicate",
+    principals: [localRoot, { ...remoteManager, state: "revoked" }],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    expectedAllowed: false,
+    expectedReasonOrCode: "REVOKED_PRINCIPAL"
+  },
+  {
+    name: "stale actor generation cannot send",
+    principals: [localRoot, { ...remoteManager, generation: 2 }],
+    actorId: "remote-manager",
+    action: "send",
+    targetId: "local-root",
+    context: { actorGeneration: 1 },
+    expectedAllowed: false,
+    expectedReasonOrCode: "STALE_GENERATION"
+  }
+];
+var POLICY_SEMANTICS_HASH = "f3b00e503631bc91123aedfbcf1df72cc9913e1893c09728b2c598f3dcdfdfe0";
+
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
 function writeMessage(socket, msg) {
@@ -262,6 +422,49 @@ var PersistentOutboundOutbox = class {
   }
 };
 
+// broker/access-credential.ts
+import { readFileSync as readFileSync3 } from "fs";
+var ACCESS_CREDENTIAL_ENV = "AGENT_INTERCOM_ACCESS_CREDENTIAL_PATH";
+var ACCESS_CREDENTIAL_VERSION = 1;
+function nonEmptyString(value) {
+  return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+function loadRemoteAccessCredential(env = process.env) {
+  const path = env[ACCESS_CREDENTIAL_ENV]?.trim();
+  if (!path) return void 0;
+  const parsed = JSON.parse(readFileSync3(path, "utf8"));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid Agent Intercom access credential at ${path}`);
+  }
+  const credential = parsed;
+  if (nonEmptyString(credential.enrollmentToken)) {
+    return { path, access: { enrollmentToken: credential.enrollmentToken }, enrollment: true };
+  }
+  if (credential.version === ACCESS_CREDENTIAL_VERSION && nonEmptyString(credential.sessionCredential) && nonEmptyString(credential.sessionId) && typeof credential.generation === "number" && Number.isSafeInteger(credential.generation) && credential.generation > 0) {
+    return {
+      path,
+      access: {
+        sessionCredential: credential.sessionCredential,
+        sessionId: credential.sessionId,
+        generation: credential.generation
+      },
+      enrollment: false
+    };
+  }
+  throw new Error(`Invalid Agent Intercom access credential at ${path}`);
+}
+function writeRemoteSessionCredential(path, sessionId, metadata) {
+  if (!metadata.sessionCredential) {
+    throw new Error("Remote enrollment response omitted the session credential");
+  }
+  writeDurableJson(path, {
+    version: ACCESS_CREDENTIAL_VERSION,
+    sessionCredential: metadata.sessionCredential,
+    sessionId,
+    generation: metadata.generation
+  });
+}
+
 // broker/client.ts
 function toError(error) {
   return error instanceof Error ? error : new Error(String(error));
@@ -322,7 +525,22 @@ function isSessionInfo(value) {
   if (session.peerUid !== void 0 && typeof session.peerUid !== "number") {
     return false;
   }
-  return session.trustedLocal === void 0 || typeof session.trustedLocal === "boolean";
+  if (session.trustedLocal !== void 0 && typeof session.trustedLocal !== "boolean") return false;
+  if (session.origin !== void 0 && session.origin !== "local" && session.origin !== "remote") return false;
+  if (session.remoteHostId !== void 0 && typeof session.remoteHostId !== "string") return false;
+  if (session.parentSessionId !== void 0 && typeof session.parentSessionId !== "string") return false;
+  if (session.rootSessionId !== void 0 && typeof session.rootSessionId !== "string") return false;
+  if (session.generation !== void 0 && (typeof session.generation !== "number" || !Number.isSafeInteger(session.generation))) return false;
+  if (session.canDelegate !== void 0 && typeof session.canDelegate !== "boolean") return false;
+  for (const field of ["depth", "maxDepth", "maxChildren"]) {
+    if (session[field] !== void 0 && (typeof session[field] !== "number" || !Number.isSafeInteger(session[field]))) return false;
+  }
+  return true;
+}
+function isRemoteAccessMetadata(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const access = value;
+  return access.origin === "remote" && typeof access.remoteHostId === "string" && typeof access.parentSessionId === "string" && typeof access.rootSessionId === "string" && typeof access.generation === "number" && Number.isSafeInteger(access.generation) && access.generation > 0 && typeof access.canDelegate === "boolean" && typeof access.depth === "number" && Number.isSafeInteger(access.depth) && typeof access.maxDepth === "number" && Number.isSafeInteger(access.maxDepth) && typeof access.maxChildren === "number" && Number.isSafeInteger(access.maxChildren) && (access.sessionCredential === void 0 || typeof access.sessionCredential === "string");
 }
 var IntercomClient = class extends EventEmitter {
   socket = null;
@@ -331,6 +549,7 @@ var IntercomClient = class extends EventEmitter {
   pendingLists = /* @__PURE__ */ new Map();
   pendingAskControls = /* @__PURE__ */ new Map();
   outbox = null;
+  remoteAccessCredential;
   disconnecting = false;
   disconnectError = null;
   failPending(error) {
@@ -380,6 +599,7 @@ var IntercomClient = class extends EventEmitter {
       let target;
       try {
         target = getBrokerConnectTarget();
+        this.remoteAccessCredential = loadRemoteAccessCredential();
         socket = connectToBrokerTarget(target);
       } catch (error) {
         reject(toError(error));
@@ -476,7 +696,8 @@ var IntercomClient = class extends EventEmitter {
           protocol: INTERCOM_PROTOCOL_NAME,
           version: INTERCOM_PROTOCOL_VERSION,
           session,
-          ...sessionId ? { sessionId } : {},
+          ...!this.remoteAccessCredential && sessionId ? { sessionId } : {},
+          ...this.remoteAccessCredential ? { access: this.remoteAccessCredential.access } : {},
           ...typeof target === "string" ? {} : { stateId: target.stateId }
         });
       } catch (error) {
@@ -505,6 +726,24 @@ var IntercomClient = class extends EventEmitter {
         }
         if (this._sessionId !== null) {
           throw new Error("Received duplicate registered message");
+        }
+        if (this.remoteAccessCredential) {
+          const contract = brokerMessage.remoteAccess;
+          const contractFields = typeof contract === "object" && contract !== null ? contract : void 0;
+          if (!contractFields || contractFields.feature !== "remote-access-v1" || contractFields.policySemanticsVersion !== POLICY_SEMANTICS_VERSION || contractFields.policySemanticsHash !== POLICY_SEMANTICS_HASH) {
+            throw new Error("Remote Intercom policy contract is absent or incompatible");
+          }
+          if (!isRemoteAccessMetadata(brokerMessage.access)) {
+            throw new Error("Remote Intercom registration omitted broker-owned provenance");
+          }
+          if (this.remoteAccessCredential.enrollment) {
+            writeRemoteSessionCredential(this.remoteAccessCredential.path, brokerMessage.sessionId, brokerMessage.access);
+          } else {
+            const reconnect = this.remoteAccessCredential.access;
+            if (!("sessionId" in reconnect) || reconnect.sessionId !== brokerMessage.sessionId || reconnect.generation !== brokerMessage.access.generation) {
+              throw new Error("Remote Intercom reconnect identity or generation changed unexpectedly");
+            }
+          }
         }
         this._sessionId = brokerMessage.sessionId;
         this.outbox = new PersistentOutboundOutbox(brokerMessage.sessionId);
@@ -852,7 +1091,7 @@ var IntercomClient = class extends EventEmitter {
 
 // broker/spawn.ts
 import { spawn } from "child_process";
-import { existsSync as existsSync2, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync2, readFileSync as readFileSync4, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
 import { join as join3, dirname as dirname2, extname, basename } from "path";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
@@ -915,7 +1154,11 @@ function isBrokerHealthOkMessage(message, requestId) {
     return false;
   }
   const response = message;
-  return response.type === "health_ok" && response.requestId === requestId && response.protocol === INTERCOM_PROTOCOL_NAME && response.version === INTERCOM_PROTOCOL_VERSION;
+  if (response.type !== "health_ok" || response.requestId !== requestId || response.protocol !== INTERCOM_PROTOCOL_NAME || response.version !== INTERCOM_PROTOCOL_VERSION || response.endpoint !== "local") return false;
+  const remoteAccess = response.remoteAccess;
+  if (typeof remoteAccess !== "object" || remoteAccess === null || Array.isArray(remoteAccess)) return false;
+  const contract = remoteAccess;
+  return contract.feature === "remote-access-v1" && contract.policySemanticsVersion === POLICY_SEMANTICS_VERSION && contract.policySemanticsHash === POLICY_SEMANTICS_HASH;
 }
 function writeWindowsHiddenLauncher(commandLine, launcherPath = getWindowsHiddenLauncherPath()) {
   ensureIntercomRuntimeDir(dirname2(launcherPath));
@@ -1039,7 +1282,7 @@ async function stopBrokerProcess(pidFile = BROKER_PID, timeoutMs = 3e3) {
   if (!existsSync2(pidFile)) return;
   let pid;
   try {
-    pid = Number.parseInt(readFileSync3(pidFile, "utf-8").trim(), 10);
+    pid = Number.parseInt(readFileSync4(pidFile, "utf-8").trim(), 10);
   } catch {
     return;
   }
@@ -1066,7 +1309,7 @@ async function isBrokerRunning() {
   }
   if (!existsSync2(BROKER_PID)) return false;
   try {
-    const pid = parseInt(readFileSync3(BROKER_PID, "utf-8").trim(), 10);
+    const pid = parseInt(readFileSync4(BROKER_PID, "utf-8").trim(), 10);
     if (!Number.isFinite(pid)) return false;
     process.kill(pid, 0);
     return checkSocketConnectable();
@@ -1167,7 +1410,7 @@ function isSpawnLockStale() {
     return false;
   }
   try {
-    const [pidLine = "", createdAtLine = "0"] = readFileSync3(BROKER_SPAWN_LOCK, "utf-8").trim().split("\n");
+    const [pidLine = "", createdAtLine = "0"] = readFileSync4(BROKER_SPAWN_LOCK, "utf-8").trim().split("\n");
     const pid = Number.parseInt(pidLine, 10);
     const createdAt = Number.parseInt(createdAtLine, 10);
     const ageMs = Date.now() - createdAt;
@@ -1201,7 +1444,7 @@ async function waitForBroker(timeoutMs = 5e3) {
 }
 
 // config.ts
-import { existsSync as existsSync3, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5 } from "fs";
 import { join as join4, resolve as resolve2 } from "path";
 import { homedir as homedir2 } from "os";
 var DEFAULT_ASK_TIMEOUT_MS = 45 * 1e3;
@@ -1238,7 +1481,7 @@ function loadConfig() {
     return { ...defaults };
   }
   try {
-    const raw = readFileSync4(configPath, "utf-8");
+    const raw = readFileSync5(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new Error("Config must be a JSON object");
@@ -1282,7 +1525,7 @@ function loadConfig() {
 }
 
 // opencode/inbound-store.ts
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { dirname as dirname3, join as join5 } from "path";
 var EMPTY_STATE = { version: 1, records: {}, delivered: [] };
 var MAX_DELIVERED_IDS = 1e3;
@@ -1315,7 +1558,7 @@ var DurableInboundStore = class {
   load() {
     if (!existsSync4(this.path)) return structuredClone(EMPTY_STATE);
     try {
-      return normalizeState(JSON.parse(readFileSync5(this.path, "utf8")));
+      return normalizeState(JSON.parse(readFileSync6(this.path, "utf8")));
     } catch {
       return structuredClone(EMPTY_STATE);
     }
@@ -1437,7 +1680,14 @@ function pendingSelector(entries, entry) {
 }
 function publicPendingEntry(entry, selector) {
   return {
-    from: { id: entry.from.id, name: entry.from.name },
+    from: {
+      id: entry.from.id,
+      name: entry.from.name,
+      origin: entry.from.origin ?? "local",
+      ...entry.from.remoteHostId ? { remote_host_id: entry.from.remoteHostId } : {},
+      ...entry.from.parentSessionId ? { parent_session_id: entry.from.parentSessionId } : {},
+      ...entry.from.generation ? { generation: entry.from.generation } : {}
+    },
     received_at: entry.receivedAt,
     read: entry.read,
     text: entry.message.content.text,
@@ -1498,6 +1748,10 @@ function resolveSessionTarget(sessions, nameOrId) {
   }
   return null;
 }
+function formatSessionDisplay(session) {
+  const name = session.name || session.id;
+  return session.origin === "remote" ? `${name} [remote:${session.remoteHostId || "unknown-host"}]` : name;
+}
 function formatSessionList(sessions, currentSessionId, currentCwd) {
   if (!sessions.length) return "No intercom sessions connected.";
   return sessions.map((session) => {
@@ -1507,7 +1761,7 @@ function formatSessionList(sessions, currentSessionId, currentCwd) {
       session.status
     ].filter((tag) => Boolean(tag));
     const suffix = tags.length ? ` [${tags.join(", ")}]` : "";
-    return `- ${session.name || "unnamed"} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
+    return `- ${formatSessionDisplay(session)} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
   }).join("\n");
 }
 function detectGitRoot(cwd) {
@@ -1819,12 +2073,12 @@ ${replyText}`, { ok: true, message_id: result.id, reply });
     }
     const pendingAsks = Array.from(this.unresolvedAsks.values()).sort((a, b) => a.receivedAt - b.receivedAt);
     const lines = [
-      unreadMessages.length ? unreadMessages.map((entry) => `- ${entry.from.name || entry.from.id}: ${entry.message.content.text}${formatAttachments(entry.message.content.attachments)}`).join("\n") : "No unread messages.",
+      unreadMessages.length ? unreadMessages.map((entry) => `- ${formatSessionDisplay(entry.from)}: ${entry.message.content.text}${formatAttachments(entry.message.content.attachments)}`).join("\n") : "No unread messages.",
       pendingAsks.length ? `
 Pending asks:
 ${pendingAsks.map((entry) => {
         const selector = pendingSelector(pendingAsks, entry);
-        return `- ${entry.from.name || entry.from.id}${selector ? ` [${selector}]` : ""}: ${entry.message.content.text}`;
+        return `- ${formatSessionDisplay(entry.from)}${selector ? ` [${selector}]` : ""}: ${entry.message.content.text}`;
       }).join("\n")}` : ""
     ].filter(Boolean);
     return textResult(lines.join("\n"), {
@@ -1958,7 +2212,7 @@ async function invokeAgentFleet(params, context, env = process.env) {
 
 // opencode/control.ts
 import { randomUUID as randomUUID5 } from "node:crypto";
-import { mkdirSync as mkdirSync4, readFileSync as readFileSync6, readdirSync, renameSync as renameSync3, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync7, readdirSync, renameSync as renameSync3, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join7 } from "node:path";
 var CONTROL_DIR_NAME = "opencode-control";
 function controlDir() {
@@ -1991,7 +2245,7 @@ function startOpenCodeControlServer(options) {
         const requestPath = join7(directory, file);
         let request;
         try {
-          request = JSON.parse(readFileSync6(requestPath, "utf8"));
+          request = JSON.parse(readFileSync7(requestPath, "utf8"));
         } catch {
           continue;
         }
@@ -2090,7 +2344,7 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
     return `[agent-intercom-message:${messageID}]`;
   }
   function formatInboundPrompt(entry) {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const replyHint = entry.message.expectsReply ? "\n\nThis message expects a reply. Use intercom_reply with only your reply text while this turn is active. If you reply later, use intercom_pending plus the sender and oldest/latest selector." : "";
     return [
       `Incoming intercom message from ${from} (${entry.from.model}, ${entry.from.cwd}):`,
@@ -2225,7 +2479,7 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
     }
   }
   async function injectInbound(entry) {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const prompt = formatInboundPrompt(entry);
     if (deliveredMessageIDs.has(entry.message.id)) {
       logInject("inject.skip_delivered", { messageID: entry.message.id });

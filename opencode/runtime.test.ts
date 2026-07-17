@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { IntercomClient } from "../broker/client.ts";
 import { DurableInboundStore } from "./inbound-store.ts";
-import { buildOpenCodeRuntimeIdentity, OpenCodeIntercomRuntime, selectPendingAsk, type PendingInboundMessage } from "./runtime.ts";
+import { buildOpenCodeRuntimeIdentity, formatSessionDisplay, formatSessionList, OpenCodeIntercomRuntime, selectPendingAsk, type PendingInboundMessage } from "./runtime.ts";
 
 class FakeIntercomClient extends EventEmitter {
   connected = false;
@@ -36,6 +36,12 @@ test("Intercom identity does not conflate the OpenCode session namespace", () =>
   assert.equal(identity.sessionId, "intercom-worker");
   const fallback = buildOpenCodeRuntimeIdentity({ OPENCODE_SESSION_ID: "ses_open_code" }, "/repo", 42);
   assert.notEqual(fallback.sessionId, "ses_open_code");
+});
+
+test("remote session provenance is visible in model-facing labels", () => {
+  const remote = { id: "remote", name: "worker", cwd: "/repo", model: "test", pid: 1, startedAt: 1, lastActivity: 1, origin: "remote" as const, remoteHostId: "ika-dev-v3" };
+  assert.equal(formatSessionDisplay(remote), "worker [remote:ika-dev-v3]");
+  assert.match(formatSessionList([remote], null, "/other"), /worker \[remote:ika-dev-v3\]/);
 });
 
 test("selectPendingAsk uses oldest/latest without exposing message IDs", () => {

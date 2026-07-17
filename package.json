@@ -32,7 +32,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepare": "npm run build",
-    "test": "tsx --test broker/client.test.ts broker/framing.test.ts broker/ownership.test.ts broker/paths.test.ts broker/spawn.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts",
+    "test": "tsx --test broker/*.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -44,6 +44,7 @@
     "claude"
   ],
   "dependencies": {
+    "@dataforxyz/agent-intercom-core": "git+https://github.com/dataforxyz/agent-intercom-core.git#cb5d2212912db0cd8abbb16ab08e4b539424a05d",
     "@opencode-ai/plugin": "^1.17.15"
   },
   "devDependencies": {
