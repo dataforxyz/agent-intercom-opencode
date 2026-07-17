@@ -1,6 +1,6 @@
 import { appendFileSync } from "fs";
 import { tool, type Plugin } from "@opencode-ai/plugin";
-import { OpenCodeIntercomRuntime, formatAttachments, type PendingInboundMessage } from "./runtime.ts";
+import { OpenCodeIntercomRuntime, formatAttachments, formatSessionDisplay, type PendingInboundMessage } from "./runtime.ts";
 import { normalizeOpenCodeSessionStatus, OpenCodePeerHealthReporter } from "./health.ts";
 import { invokeAgentFleet, isFleetManagementEnabled } from "./fleet.ts";
 import { startOpenCodeControlServer } from "./control.ts";
@@ -101,7 +101,7 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
   }
 
   function formatInboundPrompt(entry: PendingInboundMessage): string {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const replyHint = entry.message.expectsReply
       ? "\n\nThis message expects a reply. Use intercom_reply with only your reply text while this turn is active. If you reply later, use intercom_pending plus the sender and oldest/latest selector."
       : "";
@@ -249,7 +249,7 @@ export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, server
   }
 
   async function injectInbound(entry: PendingInboundMessage): Promise<void> {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const prompt = formatInboundPrompt(entry);
     if (deliveredMessageIDs.has(entry.message.id)) {
       logInject("inject.skip_delivered", { messageID: entry.message.id });

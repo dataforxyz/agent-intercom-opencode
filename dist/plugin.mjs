@@ -13,10 +13,10 @@ import { EventEmitter } from "events";
 import net from "net";
 import { randomUUID as randomUUID2 } from "crypto";
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
 var POLICY_SEMANTICS_VERSION = 1;
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy-vectors.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",
@@ -1648,7 +1648,14 @@ function pendingSelector(entries, entry) {
 }
 function publicPendingEntry(entry, selector) {
   return {
-    from: { id: entry.from.id, name: entry.from.name },
+    from: {
+      id: entry.from.id,
+      name: entry.from.name,
+      origin: entry.from.origin ?? "local",
+      ...entry.from.remoteHostId ? { remote_host_id: entry.from.remoteHostId } : {},
+      ...entry.from.parentSessionId ? { parent_session_id: entry.from.parentSessionId } : {},
+      ...entry.from.generation ? { generation: entry.from.generation } : {}
+    },
     received_at: entry.receivedAt,
     read: entry.read,
     text: entry.message.content.text,
@@ -1709,6 +1716,10 @@ function resolveSessionTarget(sessions, nameOrId) {
   }
   return null;
 }
+function formatSessionDisplay(session) {
+  const name = session.name || session.id;
+  return session.origin === "remote" ? `${name} [remote:${session.remoteHostId || "unknown-host"}]` : name;
+}
 function formatSessionList(sessions, currentSessionId, currentCwd) {
   if (!sessions.length) return "No intercom sessions connected.";
   return sessions.map((session) => {
@@ -1718,7 +1729,7 @@ function formatSessionList(sessions, currentSessionId, currentCwd) {
       session.status
     ].filter((tag) => Boolean(tag));
     const suffix = tags.length ? ` [${tags.join(", ")}]` : "";
-    return `- ${session.name || "unnamed"} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
+    return `- ${formatSessionDisplay(session)} (${session.id.slice(0, 8)}) - ${session.cwd} (${session.model})${suffix}`;
   }).join("\n");
 }
 function detectGitRoot(cwd) {
@@ -2030,12 +2041,12 @@ ${replyText}`, { ok: true, message_id: result.id, reply });
     }
     const pendingAsks = Array.from(this.unresolvedAsks.values()).sort((a, b) => a.receivedAt - b.receivedAt);
     const lines = [
-      unreadMessages.length ? unreadMessages.map((entry) => `- ${entry.from.name || entry.from.id}: ${entry.message.content.text}${formatAttachments(entry.message.content.attachments)}`).join("\n") : "No unread messages.",
+      unreadMessages.length ? unreadMessages.map((entry) => `- ${formatSessionDisplay(entry.from)}: ${entry.message.content.text}${formatAttachments(entry.message.content.attachments)}`).join("\n") : "No unread messages.",
       pendingAsks.length ? `
 Pending asks:
 ${pendingAsks.map((entry) => {
         const selector = pendingSelector(pendingAsks, entry);
-        return `- ${entry.from.name || entry.from.id}${selector ? ` [${selector}]` : ""}: ${entry.message.content.text}`;
+        return `- ${formatSessionDisplay(entry.from)}${selector ? ` [${selector}]` : ""}: ${entry.message.content.text}`;
       }).join("\n")}` : ""
     ].filter(Boolean);
     return textResult(lines.join("\n"), {
@@ -2301,7 +2312,7 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
     return `[agent-intercom-message:${messageID}]`;
   }
   function formatInboundPrompt(entry) {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const replyHint = entry.message.expectsReply ? "\n\nThis message expects a reply. Use intercom_reply with only your reply text while this turn is active. If you reply later, use intercom_pending plus the sender and oldest/latest selector." : "";
     return [
       `Incoming intercom message from ${from} (${entry.from.model}, ${entry.from.cwd}):`,
@@ -2436,7 +2447,7 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
     }
   }
   async function injectInbound(entry) {
-    const from = entry.from.name || entry.from.id;
+    const from = formatSessionDisplay(entry.from);
     const prompt = formatInboundPrompt(entry);
     if (deliveredMessageIDs.has(entry.message.id)) {
       logInject("inject.skip_delivered", { messageID: entry.message.id });

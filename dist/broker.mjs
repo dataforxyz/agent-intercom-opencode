@@ -4,7 +4,7 @@ import { existsSync as existsSync2, readFileSync as readFileSync4, renameSync as
 import { join as join2 } from "path";
 import { randomUUID as randomUUID3 } from "crypto";
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
 var POLICY_SEMANTICS_VERSION = 1;
 function activePrincipal(state, id) {
   return state.principals[id];
@@ -15,18 +15,23 @@ function isDirectParentPair(left, right) {
 function authorize(state, actorId, _action, targetId, context = {}) {
   const actor = activePrincipal(state, actorId);
   const target = activePrincipal(state, targetId);
-  if (!actor || !target) return { allowed: false, code: "UNKNOWN_PRINCIPAL" };
-  if (actor.state !== "active" || target.state !== "active") return { allowed: false, code: "REVOKED_PRINCIPAL" };
+  if (!actor || !target)
+    return { allowed: false, code: "UNKNOWN_PRINCIPAL" };
+  if (actor.state !== "active" || target.state !== "active")
+    return { allowed: false, code: "REVOKED_PRINCIPAL" };
   if (context.actorGeneration !== void 0 && context.actorGeneration !== actor.generation || context.targetGeneration !== void 0 && context.targetGeneration !== target.generation) {
     return { allowed: false, code: "STALE_GENERATION" };
   }
-  if (actor.id === target.id) return { allowed: true, reason: "self" };
-  if (actor.kind === "local" && target.kind === "local") return { allowed: true, reason: "local-public" };
-  if (isDirectParentPair(actor, target)) return { allowed: true, reason: "direct-parent" };
+  if (actor.id === target.id)
+    return { allowed: true, reason: "self" };
+  if (actor.kind === "local" && target.kind === "local")
+    return { allowed: true, reason: "local-public" };
+  if (isDirectParentPair(actor, target))
+    return { allowed: true, reason: "direct-parent" };
   return { allowed: false, code: "POLICY_DENIED" };
 }
 
-// node_modules/@dataforxyz/agent-intercom-core/src/policy-vectors.ts
+// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",
@@ -265,6 +270,9 @@ function getBrokerAccessStateFilePath(intercomDir = getIntercomDirPath()) {
 function getBrokerAdminCredentialFilePath(intercomDir = getIntercomDirPath()) {
   return join(intercomDir, "broker-admin.json");
 }
+function getBrokerAuditFilePath(intercomDir = getIntercomDirPath()) {
+  return join(intercomDir, "broker-audit.jsonl");
+}
 function getRemoteGatewaySocketPath(platform = process.platform, agentDir = getAgentDirPath()) {
   if (platform === "win32") {
     return `\\\\.\\pipe\\pi-intercom-remote-${sanitizePipeSegment(agentDir)}`;
@@ -428,7 +436,7 @@ function newSecret() {
 }
 function requireText(value, field, maxLength = 512) {
   const normalized = value.trim();
-  if (!normalized || normalized.length > maxLength || normalized.includes("\0")) {
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) {
     throw new Error(`Invalid ${field}`);
   }
   return normalized;
@@ -625,6 +633,41 @@ function visibleSessions(sessions, actorId) {
   return values.filter((target) => authorizeSessionAction(values, actorId, "discover", target.id).allowed);
 }
 
+// broker/audit.ts
+import { closeSync as closeSync3, fsyncSync as fsyncSync2, openSync as openSync3, writeSync } from "fs";
+var BROKER_AUDIT_VERSION = 1;
+var BrokerAuditLog = class {
+  constructor(path, now = Date.now) {
+    this.path = path;
+    this.now = now;
+  }
+  path;
+  now;
+  record(entry) {
+    const line = `${JSON.stringify({
+      version: BROKER_AUDIT_VERSION,
+      timestamp: this.now(),
+      ...entry
+    })}
+`;
+    const descriptor = openSync3(this.path, "a", INTERCOM_RUNTIME_FILE_MODE);
+    try {
+      writeSync(descriptor, line, void 0, "utf8");
+      fsyncSync2(descriptor);
+    } finally {
+      closeSync3(descriptor);
+    }
+    restrictIntercomRuntimeFile(this.path);
+  }
+  tryRecord(entry) {
+    try {
+      this.record(entry);
+    } catch (error) {
+      console.error("Failed to append Agent Intercom broker audit event:", error);
+    }
+  }
+};
+
 // broker/broker.ts
 var INTERCOM_DIR = getIntercomDirPath();
 var LISTEN_TARGET = getBrokerListenTarget();
@@ -635,6 +678,7 @@ var PORT_PATH = getBrokerPortFilePath(INTERCOM_DIR);
 var ASK_STATE_PATH = getBrokerAskStateFilePath(INTERCOM_DIR);
 var ACCESS_STATE_PATH = getBrokerAccessStateFilePath(INTERCOM_DIR);
 var ADMIN_CREDENTIAL_PATH = getBrokerAdminCredentialFilePath(INTERCOM_DIR);
+var AUDIT_PATH = getBrokerAuditFilePath(INTERCOM_DIR);
 var BROKER_STATE_ID = randomUUID3();
 var MAX_SESSIONS = 128;
 var MAX_UNREGISTERED_CONNECTIONS = 32;
@@ -724,10 +768,12 @@ var IntercomBroker = class {
   shutdownTimer = null;
   askTimeoutMs = getAskTimeoutMs();
   accessRegistry;
+  audit;
   constructor() {
     ensureIntercomRuntimeDir(INTERCOM_DIR);
     acquireBrokerOwnership(OWNER_PATH);
     this.accessRegistry = new RemoteAccessRegistry(ACCESS_STATE_PATH);
+    this.audit = new BrokerAuditLog(AUDIT_PATH);
     this.accessRegistry.ensureAdminCredential(ADMIN_CREDENTIAL_PATH);
     this.loadAskEdges();
     if (typeof LISTEN_TARGET === "string" && process.platform !== "win32") {
@@ -856,6 +902,16 @@ var IntercomBroker = class {
       if (sessionId) {
         const existing = this.sessions.get(sessionId);
         if (existing?.socket === socket) {
+          if (existing.info.origin === "remote") {
+            this.audit.tryRecord({
+              event: "remote_disconnect",
+              outcome: "observed",
+              actorId: sessionId,
+              remoteHostId: existing.info.remoteHostId,
+              generation: existing.info.generation,
+              reason: "SOCKET_CLOSED"
+            });
+          }
           this.broadcastVisible({ type: "session_left", sessionId }, existing.info, sessionId);
           this.sessions.delete(sessionId);
           this.clearPendingDeliveriesForSession(sessionId, socket);
@@ -975,6 +1031,7 @@ var IntercomBroker = class {
         let id;
         let remotePrincipal;
         let issuedSessionCredential;
+        let enrollmentConsumed = false;
         if (origin === "remote") {
           if (this.sessions.size >= MAX_SESSIONS) {
             this.sendError(socket, "TOO_MANY_SESSIONS", "Too many registered intercom sessions");
@@ -983,6 +1040,7 @@ var IntercomBroker = class {
           }
           const access = clientMessage.access;
           if (typeof access !== "object" || access === null || Array.isArray(access)) {
+            this.audit.tryRecord({ event: "remote_registration_denied", outcome: "denied", reason: "MISSING_CREDENTIAL" });
             this.sendError(socket, "ACCESS_DENIED", "Remote registration requires an access credential");
             socket.end();
             break;
@@ -993,18 +1051,28 @@ var IntercomBroker = class {
               const consumed = this.accessRegistry.consumeEnrollment(fields.enrollmentToken);
               remotePrincipal = consumed.principal;
               issuedSessionCredential = consumed.sessionCredential;
+              enrollmentConsumed = true;
             } else if (typeof fields.sessionCredential === "string" && typeof fields.sessionId === "string" && typeof fields.generation === "number" && Number.isSafeInteger(fields.generation)) {
               remotePrincipal = this.accessRegistry.authenticateSession(fields.sessionId, fields.generation, fields.sessionCredential);
             } else {
               throw new Error("Invalid remote access credential shape");
             }
           } catch {
+            this.audit.tryRecord({ event: "remote_registration_denied", outcome: "denied", reason: "INVALID_CREDENTIAL" });
             this.sendError(socket, "ACCESS_DENIED", "Remote registration credential was rejected");
             socket.end();
             break;
           }
           id = remotePrincipal.id;
           if (this.sessions.has(id)) {
+            this.audit.tryRecord({
+              event: "credential_reuse_denied",
+              outcome: "denied",
+              actorId: id,
+              remoteHostId: remotePrincipal.remoteHostId,
+              generation: remotePrincipal.generation,
+              reason: "ALREADY_ACTIVE"
+            });
             this.sendError(socket, "ACCESS_DENIED", "Remote session credential is already active");
             socket.end();
             break;
@@ -1058,6 +1126,24 @@ var IntercomBroker = class {
           trustedLocal: typeof LISTEN_TARGET === "string" && process.platform !== "win32",
           origin: "local"
         };
+        if (remotePrincipal) {
+          this.audit.record({
+            event: enrollmentConsumed ? "enrollment_consumed" : "remote_reconnect",
+            outcome: "allowed",
+            actorId: id,
+            targetId: remotePrincipal.parentSessionId,
+            remoteHostId: remotePrincipal.remoteHostId,
+            generation: remotePrincipal.generation
+          });
+          this.audit.record({
+            event: "remote_connect",
+            outcome: "allowed",
+            actorId: id,
+            targetId: remotePrincipal.parentSessionId,
+            remoteHostId: remotePrincipal.remoteHostId,
+            generation: remotePrincipal.generation
+          });
+        }
         this.sessions.set(id, { socket, info, lastPresenceBroadcastAt: Date.now() });
         if (this.shutdownTimer) {
           clearTimeout(this.shutdownTimer);
@@ -1092,6 +1178,16 @@ var IntercomBroker = class {
         }
         const existing = this.sessions.get(currentId);
         if (existing?.socket === socket) {
+          if (existing.info.origin === "remote") {
+            this.audit.tryRecord({
+              event: "remote_disconnect",
+              outcome: "observed",
+              actorId: currentId,
+              remoteHostId: existing.info.remoteHostId,
+              generation: existing.info.generation,
+              reason: "UNREGISTERED"
+            });
+          }
           this.broadcastVisible({ type: "session_left", sessionId: currentId }, existing.info, currentId);
           this.sessions.delete(currentId);
           this.clearPendingDeliveriesForSession(currentId, socket);
@@ -1109,7 +1205,20 @@ var IntercomBroker = class {
         if (typeof clientMessage.requestId !== "string") {
           throw new Error("Invalid list message");
         }
-        const sessions = visibleSessions(Array.from(this.sessions.values(), (session) => session.info), currentId);
+        const allSessions = Array.from(this.sessions.values(), (session) => session.info);
+        const sessions = visibleSessions(allSessions, currentId);
+        const actor = this.sessions.get(currentId);
+        if (actor?.info.origin === "remote" && sessions.length < allSessions.length) {
+          this.audit.tryRecord({
+            event: "remote_visibility_filtered",
+            outcome: "observed",
+            actorId: currentId,
+            remoteHostId: actor.info.remoteHostId,
+            generation: actor.info.generation,
+            visibleCount: sessions.length,
+            hiddenCount: allSessions.length - sessions.length
+          });
+        }
         writeMessage(socket, { type: "sessions", requestId: clientMessage.requestId, sessions });
         break;
       }
@@ -1166,7 +1275,20 @@ var IntercomBroker = class {
           break;
         }
         const action = message.replyTo ? "reply" : message.expectsReply ? "ask" : "send";
-        const targets = this.findSessions(clientMessage.to).filter((target) => this.isAuthorized(currentId, action, target.info.id));
+        const candidates = this.findSessions(clientMessage.to);
+        const targets = candidates.filter((target) => this.isAuthorized(currentId, action, target.info.id));
+        if (candidates.length > 0 && targets.length === 0) {
+          const actor = this.sessions.get(currentId);
+          this.audit.tryRecord({
+            event: "remote_delivery_denied",
+            outcome: "denied",
+            actorId: currentId,
+            targetId: candidates.length === 1 ? candidates[0].info.id : void 0,
+            remoteHostId: actor?.info.remoteHostId ?? candidates.find((candidate) => candidate.info.remoteHostId)?.info.remoteHostId,
+            generation: actor?.info.generation,
+            reason: "POLICY_DENIED"
+          });
+        }
         if (targets.length === 1) {
           const fromSession = this.sessions.get(currentId);
           if (!fromSession || fromSession.socket !== socket) {
@@ -1377,6 +1499,14 @@ var IntercomBroker = class {
       remoteHostId: enrollment.remoteHostId,
       ...enrollment.expiresAt !== void 0 ? { expiresAt: enrollment.expiresAt } : {}
     }, enrollment.ttlMs);
+    this.audit.record({
+      event: "enrollment_issued",
+      outcome: "allowed",
+      actorId: parent.info.id,
+      targetId: enrollment.name,
+      remoteHostId: enrollment.remoteHostId,
+      reason: `expires:${issued.expiresAt}`
+    });
     writeMessage(socket, {
       type: "access_control_result",
       requestId: message.requestId,
