@@ -13,10 +13,10 @@ import { EventEmitter } from "events";
 import net from "net";
 import { randomUUID as randomUUID2 } from "crypto";
 
-// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
+// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
 var POLICY_SEMANTICS_VERSION = 2;
 
-// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
+// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",

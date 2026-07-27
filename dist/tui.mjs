@@ -1,7 +1,7 @@
 // opencode/contact.ts
 import { spawnSync } from "node:child_process";
 
-// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
+// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",

@@ -4,7 +4,7 @@ import { existsSync as existsSync2, readFileSync as readFileSync4, renameSync as
 import { join as join2 } from "path";
 import { randomUUID as randomUUID3 } from "crypto";
 
-// node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
+// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
 var POLICY_SEMANTICS_VERSION = 2;
 function activePrincipal(state, id) {
   return state.principals[id];
@@ -53,7 +53,7 @@ function authorize(state, actorId, action, targetId, context = {}) {
   return { allowed: false, code: "POLICY_DENIED" };
 }
 
-// node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
+// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
 var localRoot = {
   id: "local-root",
   kind: "local",
@@ -913,6 +913,7 @@ var MAX_SESSION_NAME_LENGTH = 256;
 var MAX_SESSION_CWD_LENGTH = 4096;
 var MAX_SESSION_MODEL_LENGTH = 512;
 var MAX_SESSION_STATUS_LENGTH = 512;
+var MAX_RUNTIME_INSTANCE_ID_LENGTH = 256;
 function isAttachment(value) {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -963,7 +964,16 @@ function isSessionRegistration(value) {
   if (session.name !== void 0 && (typeof session.name !== "string" || session.name.length > MAX_SESSION_NAME_LENGTH)) {
     return false;
   }
+  if (session.runtimeInstanceId !== void 0 && (typeof session.runtimeInstanceId !== "string" || session.runtimeInstanceId.length === 0 || session.runtimeInstanceId.length > MAX_RUNTIME_INSTANCE_ID_LENGTH)) {
+    return false;
+  }
   return session.status === void 0 || typeof session.status === "string" && session.status.length <= MAX_SESSION_STATUS_LENGTH;
+}
+function isSameLocalRuntime(previous, registration) {
+  if (previous.runtimeInstanceId !== void 0 || registration.runtimeInstanceId !== void 0) {
+    return previous.runtimeInstanceId !== void 0 && previous.runtimeInstanceId === registration.runtimeInstanceId;
+  }
+  return previous.info.pid === registration.pid && previous.info.startedAt === registration.startedAt;
 }
 var IntercomBroker = class {
   sessions = /* @__PURE__ */ new Map();
@@ -1306,6 +1316,15 @@ var IntercomBroker = class {
             socket.destroy();
             break;
           }
+          if (previous && !isSameLocalRuntime(previous, clientMessage.session)) {
+            this.sendError(
+              socket,
+              "SESSION_ID_IN_USE",
+              `Session ID "${id}" is already active in another local runtime; close the existing session or use a different session ID`
+            );
+            socket.end();
+            break;
+          }
           if (previous) {
             this.clearPendingDeliveriesForSession(id, previous.socket);
             this.deferAskEdgesForSession(id);
@@ -1363,7 +1382,12 @@ var IntercomBroker = class {
             generation: remotePrincipal.generation
           });
         }
-        this.sessions.set(id, { socket, info, lastPresenceBroadcastAt: Date.now() });
+        this.sessions.set(id, {
+          socket,
+          info,
+          ...!remotePrincipal && clientMessage.session.runtimeInstanceId ? { runtimeInstanceId: clientMessage.session.runtimeInstanceId } : {},
+          lastPresenceBroadcastAt: Date.now()
+        });
         if (this.shutdownTimer) {
           clearTimeout(this.shutdownTimer);
           this.shutdownTimer = null;
@@ -1626,9 +1650,10 @@ var IntercomBroker = class {
         if (typeof clientMessage.messageId !== "string" || clientMessage.messageId.length > MAX_MESSAGE_ID_LENGTH || typeof clientMessage.requestId !== "string" || clientMessage.requestId.length > MAX_MESSAGE_ID_LENGTH) {
           throw new Error("Invalid defer_ask message");
         }
+        const session = this.sessions.get(currentId);
         const edge = this.askEdges.get(this.askKey(currentId, clientMessage.messageId));
-        const applied = Boolean(edge?.from === currentId);
-        if (edge?.from === currentId && edge.state === "blocking") {
+        const applied = Boolean(session?.socket === socket && edge?.from === currentId);
+        if (applied && edge?.state === "blocking") {
           edge.state = "deferred";
           this.persistAskEdges();
           this.notifyAskDeferred(edge);
