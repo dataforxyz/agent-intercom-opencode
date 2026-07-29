@@ -1,214 +1,15 @@
 // broker/broker.ts
 import net from "net";
-import { existsSync as existsSync2, readFileSync as readFileSync4, renameSync as renameSync2, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync5, renameSync as renameSync2, writeFileSync as writeFileSync3, unlinkSync as unlinkSync2 } from "fs";
 import { join as join2 } from "path";
 import { randomUUID as randomUUID3 } from "crypto";
-
-// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
-var POLICY_SEMANTICS_VERSION = 2;
-function activePrincipal(state, id) {
-  return state.principals[id];
-}
-function isDirectParentPair(left, right) {
-  return left.parentSessionId === right.id || right.parentSessionId === left.id;
-}
-function isAncestor(state, ancestorId, descendantId) {
-  if (ancestorId === descendantId)
-    return false;
-  const visited = /* @__PURE__ */ new Set();
-  let current = state.principals[descendantId];
-  while (current?.parentSessionId && !visited.has(current.id)) {
-    if (current.parentSessionId === ancestorId)
-      return true;
-    visited.add(current.id);
-    current = state.principals[current.parentSessionId];
-  }
-  return false;
-}
-function authorize(state, actorId, action, targetId, context = {}) {
-  const actor = activePrincipal(state, actorId);
-  const target = activePrincipal(state, targetId);
-  if (!actor || !target)
-    return { allowed: false, code: "UNKNOWN_PRINCIPAL" };
-  if (actor.state !== "active" || target.state !== "active")
-    return { allowed: false, code: "REVOKED_PRINCIPAL" };
-  if (context.actorGeneration !== void 0 && context.actorGeneration !== actor.generation || context.targetGeneration !== void 0 && context.targetGeneration !== target.generation) {
-    return { allowed: false, code: "STALE_GENERATION" };
-  }
-  if (actor.id === target.id)
-    return { allowed: true, reason: "self" };
-  if (actor.kind === "local" && target.kind === "local")
-    return { allowed: true, reason: "local-public" };
-  if (action === "discover" || action === "send" || action === "ask" || action === "reply") {
-    if (isDirectParentPair(actor, target))
-      return { allowed: true, reason: "direct-parent" };
-    if (isAncestor(state, actor.id, target.id) || isAncestor(state, target.id, actor.id)) {
-      return { allowed: true, reason: "ancestor-chain" };
-    }
-  }
-  if (action === "inspect_tree" || action === "revoke" || action === "adopt") {
-    if (isAncestor(state, actor.id, target.id))
-      return { allowed: true, reason: "ancestor-control" };
-  }
-  return { allowed: false, code: "POLICY_DENIED" };
-}
-
-// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
-var localRoot = {
-  id: "local-root",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-root"
-};
-var localPeer = {
-  id: "local-peer",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-peer"
-};
-var remoteManager = {
-  id: "remote-manager",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "local-root",
-  rootSessionId: "local-root"
-};
-var remoteChild = {
-  id: "remote-child",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var remoteSibling = {
-  id: "remote-sibling",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var POLICY_VECTORS = [
-  {
-    name: "local sessions remain public",
-    principals: [localRoot, localPeer],
-    actorId: "local-root",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: true,
-    expectedReasonOrCode: "local-public"
-  },
-  {
-    name: "remote manager can reach direct local parent",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "local parent can reach direct remote child",
-    principals: [localRoot, remoteManager],
-    actorId: "local-root",
-    action: "ask",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "remote child can reach its local root through the ancestor chain",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-chain"
-  },
-  {
-    name: "remote siblings cannot communicate in phase one",
-    principals: [localRoot, remoteManager, remoteChild, remoteSibling],
-    actorId: "remote-child",
-    action: "discover",
-    targetId: "remote-sibling",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "unrelated local session cannot discover remote principal",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "local-peer",
-    action: "discover",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal cannot reach unrelated local session",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote manager may inspect its descendant subtree",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-manager",
-    action: "inspect_tree",
-    targetId: "remote-child",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-control"
-  },
-  {
-    name: "remote child cannot revoke its ancestor",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "revoke",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal may request attenuated delegation under itself",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "delegate_child",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "self"
-  },
-  {
-    name: "revoked principal cannot communicate",
-    principals: [localRoot, { ...remoteManager, state: "revoked" }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: false,
-    expectedReasonOrCode: "REVOKED_PRINCIPAL"
-  },
-  {
-    name: "stale actor generation cannot send",
-    principals: [localRoot, { ...remoteManager, generation: 2 }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    context: { actorGeneration: 1 },
-    expectedAllowed: false,
-    expectedReasonOrCode: "STALE_GENERATION"
-  }
-];
-var POLICY_SEMANTICS_HASH = "f3b00e503631bc91123aedfbcf1df72cc9913e1893c09728b2c598f3dcdfdfe0";
+import { pathToFileURL } from "node:url";
+import {
+  authorize,
+  POLICY_SEMANTICS_HASH,
+  POLICY_SEMANTICS_VERSION
+} from "@dataforxyz/agent-intercom-core";
+import { assertExactKeys as assertExactKeys3 } from "@dataforxyz/agent-intercom-core/canonical";
 
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
@@ -313,6 +114,9 @@ function getBrokerPortFilePath(intercomDir = getIntercomDirPath()) {
 function getBrokerAskStateFilePath(intercomDir = getIntercomDirPath()) {
   return join(intercomDir, "broker-asks.json");
 }
+function getBrokerBossControlStateFilePath(intercomDir = getIntercomDirPath()) {
+  return join(intercomDir, "broker-boss-controls.json");
+}
 function getBrokerAccessStateFilePath(intercomDir = getIntercomDirPath()) {
   return join(intercomDir, "broker-access.json");
 }
@@ -377,23 +181,44 @@ function getAskTimeoutMs() {
 import { randomUUID } from "crypto";
 import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from "fs";
 import { dirname } from "path";
-function writeDurableJson(filePath, value) {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify(value), { encoding: "utf-8", mode: INTERCOM_RUNTIME_FILE_MODE });
-  const fileDescriptor = openSync(temporaryPath, "r");
-  try {
+var DURABLE_JSON_FILE_OPERATIONS = Object.freeze({
+  writeFile(filePath, contents, options) {
+    writeFileSync(filePath, contents, options);
+  },
+  open(filePath, flags) {
+    return openSync(filePath, flags);
+  },
+  fsync(fileDescriptor) {
     fsyncSync(fileDescriptor);
-  } finally {
+  },
+  close(fileDescriptor) {
     closeSync(fileDescriptor);
+  },
+  rename(from, to) {
+    renameSync(from, to);
+  },
+  restrict(filePath) {
+    restrictIntercomRuntimeFile(filePath);
+  },
+  platform: process.platform
+});
+function writeDurableJson(filePath, value, operations = DURABLE_JSON_FILE_OPERATIONS) {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  operations.writeFile(temporaryPath, JSON.stringify(value), { encoding: "utf-8", mode: INTERCOM_RUNTIME_FILE_MODE });
+  const fileDescriptor = operations.open(temporaryPath, "r");
+  try {
+    operations.fsync(fileDescriptor);
+  } finally {
+    operations.close(fileDescriptor);
   }
-  renameSync(temporaryPath, filePath);
-  restrictIntercomRuntimeFile(filePath);
-  if (process.platform !== "win32") {
-    const directoryDescriptor = openSync(dirname(filePath), "r");
+  operations.rename(temporaryPath, filePath);
+  operations.restrict(filePath);
+  if (operations.platform !== "win32") {
+    const directoryDescriptor = operations.open(dirname(filePath), "r");
     try {
-      fsyncSync(directoryDescriptor);
+      operations.fsync(directoryDescriptor);
     } finally {
-      closeSync(directoryDescriptor);
+      operations.close(directoryDescriptor);
     }
   }
 }
@@ -799,6 +624,88 @@ var RemoteAccessRegistry = class {
 };
 
 // broker/authorization.ts
+import {
+  authorizeFeatureAware
+} from "@dataforxyz/agent-intercom-core/boss";
+
+// broker/boss.ts
+import {
+  BOSS_CONTROL_TYPES,
+  parseBossControlEnvelope,
+  parseBossParticipantBinding,
+  parseBossPolicyPrincipal,
+  parseFeatureRegistration
+} from "@dataforxyz/agent-intercom-core/boss";
+import {
+  ContractValidationError,
+  assertExactKeys,
+  assertRecord
+} from "@dataforxyz/agent-intercom-core/canonical";
+var CONTROL_KIND_BY_TYPE = {
+  "boss.assignment.created": "assignment_request",
+  "boss.assignment.accepted": "assignment_response",
+  "boss.assignment.checkpoint": "assignment_response",
+  "boss.assignment.submitted": "assignment_response",
+  "boss.assignment.rejected": "assignment_response",
+  "boss.assignment.cancelled": "lifecycle",
+  "boss.staffing.requested": "staffing",
+  "boss.staffing.resolved": "staffing",
+  "boss.review.requested": "review_request",
+  "boss.review.submitted": "review_result",
+  "boss.council.requested": "review_request",
+  "boss.council.submitted": "review_result",
+  "boss.proof.submitted": "proof",
+  "boss.worker.health": "health",
+  "boss.worker.blocked": "health",
+  "boss.worker.failed": "health",
+  "boss.worker.notice": "lifecycle",
+  "boss.worker.notice_delivery_failed": "lifecycle",
+  "boss.decision.required": "decision"
+};
+if (Object.keys(CONTROL_KIND_BY_TYPE).length !== BOSS_CONTROL_TYPES.length) {
+  throw new Error("Boss control type mapping is incomplete");
+}
+function bossControlKind(type) {
+  return CONTROL_KIND_BY_TYPE[type];
+}
+function parseBossSessionMetadata(value, sessionId) {
+  assertRecord(value, "$.boss");
+  assertExactKeys(value, ["registration", "principal"], ["binding"], "$.boss");
+  const metadata = value;
+  const registration = parseFeatureRegistration(metadata.registration);
+  const principal = parseBossPolicyPrincipal(metadata.principal);
+  if (registration.principalClass !== "boss-bound" || principal.principalClass !== "boss-private") {
+    throw new ContractValidationError("$.boss", "must contain Boss-bound registration and private principal metadata");
+  }
+  if (registration.principalId !== sessionId || principal.principalId !== sessionId || registration.bossRunId !== principal.bossRunId || registration.participantId !== principal.participantId || registration.bindingEpoch !== principal.bindingEpoch) {
+    throw new ContractValidationError("$.boss", "registration and principal identity bindings must exactly match the session");
+  }
+  const binding = metadata.binding === void 0 ? void 0 : parseBossParticipantBinding(metadata.binding);
+  if (principal.role === "controller") {
+    if (binding !== void 0) throw new ContractValidationError("$.boss.binding", "is forbidden for Controller principals");
+  } else {
+    if (binding === void 0) throw new ContractValidationError("$.boss.binding", "is required for Boss participants");
+    if (binding.sessionId !== sessionId || binding.bossRunId !== principal.bossRunId || binding.participantId !== principal.participantId || binding.role !== principal.role || binding.bindingEpoch !== principal.bindingEpoch || binding.state !== principal.state || binding.assignedManagerParticipantId !== principal.assignedManagerParticipantId) {
+      throw new ContractValidationError("$.boss.binding", "must exactly match the authenticated session principal");
+    }
+  }
+  return { registration, principal, ...binding === void 0 ? {} : { binding } };
+}
+function validatedBossMetadata(session) {
+  if (session.boss === void 0) return void 0;
+  return parseBossSessionMetadata(session.boss, session.id);
+}
+function parseBoundBossControl(value, sender) {
+  const envelope = parseBossControlEnvelope(value);
+  const boss = validatedBossMetadata(sender);
+  if (!boss) throw new ContractValidationError("$.envelope", "sender is not an authenticated Boss participant");
+  if (envelope.bossRunId !== boss.principal.bossRunId || envelope.participantId !== boss.principal.participantId || envelope.bindingEpoch !== boss.principal.bindingEpoch) {
+    throw new ContractValidationError("$.envelope", "run, participant, and binding epoch must match the sender");
+  }
+  return envelope;
+}
+
+// broker/authorization.ts
 function policyPrincipalForSession(session) {
   if (session.origin === "remote") {
     if (!session.parentSessionId || !session.rootSessionId || !session.generation) {
@@ -825,21 +732,387 @@ function policyPrincipalForSession(session) {
 }
 function policyStateForSessions(sessions) {
   const principals = {};
-  for (const session of sessions) principals[session.id] = policyPrincipalForSession(session);
+  for (const session of sessions) {
+    if (session.boss === void 0) principals[session.id] = policyPrincipalForSession(session);
+  }
   return { principals };
 }
-function authorizeSessionAction(sessions, actorId, action, targetId) {
-  const state = policyStateForSessions(sessions);
-  const actor = state.principals[actorId];
-  const target = state.principals[targetId];
-  return authorize(state, actorId, action, targetId, {
-    actorGeneration: actor?.generation,
-    targetGeneration: target?.generation
-  });
+function featurePolicyStateForSessions(sessions) {
+  const values = Array.from(sessions);
+  const legacy = policyStateForSessions(values);
+  const registrations = {};
+  const boss = { principals: {} };
+  for (const session of values) {
+    let metadata;
+    try {
+      metadata = validatedBossMetadata(session);
+    } catch {
+      registrations[session.id] = {};
+      continue;
+    }
+    if (metadata) {
+      registrations[session.id] = metadata.registration;
+      boss.principals[session.id] = metadata.principal;
+    } else {
+      registrations[session.id] = {
+        principalId: session.id,
+        principalClass: "ordinary",
+        state: "active"
+      };
+    }
+  }
+  return { legacy, boss, registrations };
+}
+function authorizeSessionAction(sessions, actorId, action, targetId, bossContext) {
+  const state = featurePolicyStateForSessions(sessions);
+  const actorRegistration = state.registrations[actorId];
+  const targetRegistration = state.registrations[targetId];
+  const request = {
+    actorId,
+    action,
+    targetId,
+    ...actorRegistration?.principalClass === "boss-bound" || targetRegistration?.principalClass === "boss-bound" ? { bossContext } : {
+      legacyContext: {
+        actorGeneration: state.legacy.principals[actorId]?.generation,
+        targetGeneration: state.legacy.principals[targetId]?.generation
+      }
+    }
+  };
+  return authorizeFeatureAware(state, request);
 }
 function visibleSessions(sessions, actorId) {
   const values = Array.from(sessions);
   return values.filter((target) => authorizeSessionAction(values, actorId, "discover", target.id).allowed);
+}
+
+// broker/boss-control-store.ts
+import { existsSync as existsSync2, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+import {
+  parseBossControlEnvelope as parseBossControlEnvelope2
+} from "@dataforxyz/agent-intercom-core/boss";
+import {
+  canonicalJson,
+  assertExactKeys as assertExactKeys2,
+  assertRecord as assertRecord2,
+  participantBindingEpoch
+} from "@dataforxyz/agent-intercom-core/canonical";
+var STATE_VERSION = 1;
+var CONTROL_KINDS = [
+  "assignment_request",
+  "assignment_response",
+  "health",
+  "staffing",
+  "review_request",
+  "review_result",
+  "proof",
+  "lifecycle",
+  "decision"
+];
+var TERMINAL_FAILURE_CODES = [
+  "BOSS_CONTROL_DENIED",
+  "RECIPIENT_DISCONNECTED",
+  "SENDER_DISCONNECTED",
+  "DELIVERY_TIMEOUT"
+];
+function recordValue(value, path) {
+  assertRecord2(value, path);
+  return value;
+}
+function exactKeys(value, required, optional, path) {
+  assertExactKeys2(value, required, optional, path);
+}
+function stringValue(value, path) {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${path} must be a non-empty string`);
+  return value;
+}
+function timestampValue(value, path) {
+  const timestamp = stringValue(value, path);
+  if (!Number.isFinite(Date.parse(timestamp))) throw new Error(`${path} must be a timestamp`);
+  return timestamp;
+}
+function bossControlIdempotencyScope(identity) {
+  return canonicalJson({
+    senderSessionId: identity.senderSessionId,
+    bossRunId: identity.bossRunId,
+    participantId: identity.participantId,
+    senderBindingEpoch: identity.senderBindingEpoch,
+    idempotencyKey: identity.idempotencyKey
+  });
+}
+function bossControlFingerprint(targetSessionId, envelope) {
+  return canonicalJson({
+    targetSessionId,
+    envelope: {
+      type: envelope.type,
+      version: envelope.version,
+      bossRunId: envelope.bossRunId,
+      participantId: envelope.participantId,
+      bindingEpoch: envelope.bindingEpoch,
+      ...envelope.causationId === void 0 ? {} : { causationId: envelope.causationId },
+      ...envelope.replyTo === void 0 ? {} : { replyTo: envelope.replyTo },
+      idempotencyKey: envelope.idempotencyKey,
+      payload: envelope.payload
+    }
+  });
+}
+function bossControlAcceptedFrame(record, requestMessageId) {
+  return {
+    type: "boss_control_accepted",
+    messageId: stringValue(requestMessageId, "$requestMessageId"),
+    deliveryId: record.deliveryId
+  };
+}
+function bossControlTerminalFrame(record, requestMessageId) {
+  const messageId = stringValue(requestMessageId, "$requestMessageId");
+  if (record.state === "delivered") {
+    return { type: "boss_control_delivered", messageId, deliveryId: record.deliveryId };
+  }
+  if (record.state === "rejected") {
+    return {
+      type: "boss_control_failed",
+      messageId,
+      deliveryId: record.deliveryId,
+      accepted: true,
+      code: record.failureCode,
+      reason: record.failureReason
+    };
+  }
+  throw new Error("Accepted Boss control has no terminal result");
+}
+function bossControlReplayFrames(record, requestMessageId) {
+  const accepted = bossControlAcceptedFrame(record, requestMessageId);
+  return record.state === "accepted" ? [accepted] : [accepted, bossControlTerminalFrame(record, requestMessageId)];
+}
+function parseRecord(value, path) {
+  const record = recordValue(value, path);
+  exactKeys(record, [
+    "senderSessionId",
+    "bossRunId",
+    "participantId",
+    "senderBindingEpoch",
+    "idempotencyKey",
+    "targetSessionId",
+    "targetBindingEpoch",
+    "controlKind",
+    "envelope",
+    "fingerprint",
+    "deliveryId",
+    "state",
+    "acceptedAt"
+  ], ["deliveredAt", "failureCode", "failureReason", "rejectedAt"], path);
+  const envelope = parseBossControlEnvelope2(record.envelope);
+  const senderSessionId = stringValue(record.senderSessionId, `${path}.senderSessionId`);
+  const bossRunId = stringValue(record.bossRunId, `${path}.bossRunId`);
+  const participantId = stringValue(record.participantId, `${path}.participantId`);
+  const senderBindingEpoch = participantBindingEpoch(record.senderBindingEpoch, `${path}.senderBindingEpoch`);
+  const idempotencyKey = stringValue(record.idempotencyKey, `${path}.idempotencyKey`);
+  const targetSessionId = stringValue(record.targetSessionId, `${path}.targetSessionId`);
+  const targetBindingEpoch = participantBindingEpoch(record.targetBindingEpoch, `${path}.targetBindingEpoch`);
+  const controlKind = record.controlKind;
+  if (!CONTROL_KINDS.includes(controlKind)) throw new Error(`${path}.controlKind is invalid`);
+  const fingerprint = stringValue(record.fingerprint, `${path}.fingerprint`);
+  const deliveryId = stringValue(record.deliveryId, `${path}.deliveryId`);
+  const acceptedAt = timestampValue(record.acceptedAt, `${path}.acceptedAt`);
+  if (envelope.bossRunId !== bossRunId || envelope.participantId !== participantId || envelope.bindingEpoch !== senderBindingEpoch || envelope.idempotencyKey !== idempotencyKey) {
+    throw new Error(`${path} identity does not match its envelope`);
+  }
+  if (controlKind !== bossControlKind(envelope.type)) throw new Error(`${path}.controlKind does not match its envelope type`);
+  if (fingerprint !== bossControlFingerprint(targetSessionId, envelope)) {
+    throw new Error(`${path}.fingerprint does not match its canonical target and envelope`);
+  }
+  const state = record.state;
+  if (state !== "accepted" && state !== "delivered" && state !== "rejected") throw new Error(`${path}.state is invalid`);
+  const deliveredAt = record.deliveredAt === void 0 ? void 0 : timestampValue(record.deliveredAt, `${path}.deliveredAt`);
+  const failureCode = record.failureCode;
+  const failureReason = record.failureReason === void 0 ? void 0 : stringValue(record.failureReason, `${path}.failureReason`);
+  const rejectedAt = record.rejectedAt === void 0 ? void 0 : timestampValue(record.rejectedAt, `${path}.rejectedAt`);
+  if (state === "accepted" && (deliveredAt !== void 0 || failureCode !== void 0 || failureReason !== void 0 || rejectedAt !== void 0)) {
+    throw new Error(`${path} accepted record contains terminal evidence`);
+  }
+  if (state === "delivered" && (deliveredAt === void 0 || failureCode !== void 0 || failureReason !== void 0 || rejectedAt !== void 0)) {
+    throw new Error(`${path} delivered record has invalid terminal evidence`);
+  }
+  if (state === "rejected" && (failureCode === void 0 || !TERMINAL_FAILURE_CODES.includes(failureCode) || failureReason === void 0 || rejectedAt === void 0 || deliveredAt !== void 0)) {
+    throw new Error(`${path} rejected record has invalid terminal evidence`);
+  }
+  if (deliveredAt !== void 0 && Date.parse(deliveredAt) < Date.parse(acceptedAt)) {
+    throw new Error(`${path}.deliveredAt precedes acceptance`);
+  }
+  if (rejectedAt !== void 0 && Date.parse(rejectedAt) < Date.parse(acceptedAt)) {
+    throw new Error(`${path}.rejectedAt precedes acceptance`);
+  }
+  return {
+    senderSessionId,
+    bossRunId,
+    participantId,
+    senderBindingEpoch,
+    idempotencyKey,
+    targetSessionId,
+    targetBindingEpoch,
+    controlKind,
+    envelope,
+    fingerprint,
+    deliveryId,
+    state,
+    acceptedAt,
+    ...deliveredAt === void 0 ? {} : { deliveredAt },
+    ...failureCode === void 0 ? {} : { failureCode },
+    ...failureReason === void 0 ? {} : { failureReason },
+    ...rejectedAt === void 0 ? {} : { rejectedAt }
+  };
+}
+function parseState2(value) {
+  const state = recordValue(value, "$bossControls");
+  exactKeys(state, ["version", "records"], [], "$bossControls");
+  if (state.version !== STATE_VERSION) throw new Error("Unsupported Boss control state version");
+  const recordsValue = recordValue(state.records, "$bossControls.records");
+  const records = {};
+  for (const [scope, value2] of Object.entries(recordsValue)) {
+    const record = parseRecord(value2, `$bossControls.records[${JSON.stringify(scope)}]`);
+    if (scope !== bossControlIdempotencyScope(record)) throw new Error("Boss control scope key does not match its record");
+    records[scope] = record;
+  }
+  return { version: STATE_VERSION, records };
+}
+function clone(record) {
+  return structuredClone(record);
+}
+var DurableBossControlStore = class {
+  constructor(path, persist = writeDurableJson) {
+    this.path = path;
+    ensureIntercomRuntimeDir(dirname2(path));
+    this.persist = persist;
+    this.state = this.load();
+  }
+  path;
+  state;
+  persist;
+  poisoned;
+  get(identity) {
+    this.assertUsable();
+    const record = this.state.records[bossControlIdempotencyScope(identity)];
+    return record === void 0 ? void 0 : clone(record);
+  }
+  reserve(recordValue2) {
+    this.assertUsable();
+    const record = parseRecord(recordValue2, "$record");
+    if (record.state !== "accepted") throw new Error("A Boss control reservation must start accepted");
+    const scope = bossControlIdempotencyScope(record);
+    const existing = this.state.records[scope];
+    if (existing) {
+      if (existing.fingerprint !== record.fingerprint || existing.targetBindingEpoch !== record.targetBindingEpoch || existing.controlKind !== record.controlKind) {
+        throw new Error("Conflicting Boss control idempotency replay");
+      }
+      return { created: false, record: clone(existing) };
+    }
+    const next = structuredClone(this.state);
+    next.records[scope] = record;
+    this.commit(next);
+    return { created: true, record: clone(record) };
+  }
+  markDelivered(identity, deliveryId, deliveredAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    this.assertUsable();
+    const scope = bossControlIdempotencyScope(identity);
+    const record = this.state.records[scope];
+    if (!record || record.deliveryId !== deliveryId) throw new Error("Boss control delivery does not match its durable acceptance");
+    if (record.state === "rejected") throw new Error("A rejected Boss control cannot become delivered");
+    if (record.state === "delivered") return clone(record);
+    const updated = {
+      ...record,
+      state: "delivered",
+      deliveredAt: timestampValue(deliveredAt, "$deliveredAt")
+    };
+    parseRecord(updated, "$record");
+    const next = structuredClone(this.state);
+    next.records[scope] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  markRejected(identity, deliveryId, failureCode, failureReason, rejectedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+    this.assertUsable();
+    const scope = bossControlIdempotencyScope(identity);
+    const record = this.state.records[scope];
+    if (!record || record.deliveryId !== deliveryId) throw new Error("Boss control failure does not match its durable acceptance");
+    if (record.state === "delivered") throw new Error("A delivered Boss control cannot become rejected");
+    if (record.state === "rejected") {
+      if (record.failureCode !== failureCode || record.failureReason !== failureReason) {
+        throw new Error("Conflicting terminal Boss control failure");
+      }
+      return clone(record);
+    }
+    const updated = {
+      ...record,
+      state: "rejected",
+      failureCode,
+      failureReason: stringValue(failureReason, "$failureReason"),
+      rejectedAt: timestampValue(rejectedAt, "$rejectedAt")
+    };
+    parseRecord(updated, "$record");
+    const next = structuredClone(this.state);
+    next.records[scope] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  load() {
+    if (!existsSync2(this.path)) return { version: STATE_VERSION, records: {} };
+    return parseState2(JSON.parse(readFileSync4(this.path, "utf8")));
+  }
+  loadExactTarget() {
+    if (!existsSync2(this.path)) throw new Error("Durable Boss control target is missing");
+    return parseState2(JSON.parse(readFileSync4(this.path, "utf8")));
+  }
+  commit(next) {
+    const stagedCanonical = canonicalJson(parseState2(structuredClone(next)));
+    const priorCanonical = canonicalJson(this.state);
+    try {
+      this.persist(this.path, parseState2(JSON.parse(stagedCanonical)));
+    } catch (persistError) {
+      try {
+        const recovered = this.loadExactTarget();
+        const recoveredCanonical = canonicalJson(recovered);
+        if (recoveredCanonical === stagedCanonical) {
+          this.state = parseState2(JSON.parse(stagedCanonical));
+        } else if (recoveredCanonical === priorCanonical) {
+          this.state = parseState2(JSON.parse(priorCanonical));
+        } else {
+          throw new Error("Durable Boss control state does not match the prior or staged commit");
+        }
+      } catch (reconcileError) {
+        this.poisoned = new Error("Durable Boss control store is unavailable after commit reconciliation failed", {
+          cause: reconcileError
+        });
+      }
+      throw persistError;
+    }
+    this.state = parseState2(JSON.parse(stagedCanonical));
+  }
+  assertUsable() {
+    if (this.poisoned) throw this.poisoned;
+  }
+};
+
+// broker/negotiation.ts
+import {
+  INTERCOM_BASE_PROTOCOL_VERSION,
+  evaluateBrokerCompatibility,
+  parseBrokerCapabilityAdvertisement
+} from "@dataforxyz/agent-intercom-core/boss";
+if (INTERCOM_PROTOCOL_VERSION !== INTERCOM_BASE_PROTOCOL_VERSION) {
+  throw new Error(
+    `OpenCode protocol v${INTERCOM_PROTOCOL_VERSION} diverges from Core base protocol v${INTERCOM_BASE_PROTOCOL_VERSION}`
+  );
+}
+var DORMANT_BROKER_CAPABILITIES = Object.freeze(parseBrokerCapabilityAdvertisement({
+  baseProtocolVersion: INTERCOM_BASE_PROTOCOL_VERSION,
+  features: []
+}));
+var ORDINARY_BASE3_COMPATIBILITY = Object.freeze({
+  clientKind: "ordinary",
+  supportedBaseProtocolVersions: [INTERCOM_BASE_PROTOCOL_VERSION]
+});
+function negotiateBrokerCompatibility(value) {
+  return evaluateBrokerCompatibility(value, DORMANT_BROKER_CAPABILITIES);
 }
 
 // broker/audit.ts
@@ -888,6 +1161,7 @@ var ASK_STATE_PATH = getBrokerAskStateFilePath(INTERCOM_DIR);
 var ACCESS_STATE_PATH = getBrokerAccessStateFilePath(INTERCOM_DIR);
 var ADMIN_CREDENTIAL_PATH = getBrokerAdminCredentialFilePath(INTERCOM_DIR);
 var AUDIT_PATH = getBrokerAuditFilePath(INTERCOM_DIR);
+var BOSS_CONTROL_STATE_PATH = getBrokerBossControlStateFilePath(INTERCOM_DIR);
 var BROKER_STATE_ID = randomUUID3();
 var MAX_SESSIONS = 128;
 var MAX_UNREGISTERED_CONNECTIONS = 32;
@@ -958,6 +1232,8 @@ function isSessionRegistration(value) {
     return false;
   }
   const session = value;
+  const allowedKeys = /* @__PURE__ */ new Set(["name", "cwd", "model", "pid", "startedAt", "lastActivity", "status", "runtimeInstanceId"]);
+  if (Object.keys(session).some((key) => !allowedKeys.has(key))) return false;
   if (typeof session.cwd !== "string" || session.cwd.length === 0 || session.cwd.length > MAX_SESSION_CWD_LENGTH || typeof session.model !== "string" || session.model.length === 0 || session.model.length > MAX_SESSION_MODEL_LENGTH || typeof session.pid !== "number" || !Number.isFinite(session.pid) || typeof session.startedAt !== "number" || !Number.isFinite(session.startedAt) || typeof session.lastActivity !== "number" || !Number.isFinite(session.lastActivity)) {
     return false;
   }
@@ -981,6 +1257,8 @@ var IntercomBroker = class {
   pendingDeliveries = /* @__PURE__ */ new Map();
   pendingDeliveryKeys = /* @__PURE__ */ new Map();
   recentDeliveries = /* @__PURE__ */ new Map();
+  pendingBossControls = /* @__PURE__ */ new Map();
+  pendingBossControlKeys = /* @__PURE__ */ new Map();
   connections = /* @__PURE__ */ new Set();
   unregisteredConnections = /* @__PURE__ */ new Set();
   server;
@@ -990,6 +1268,7 @@ var IntercomBroker = class {
   askTimeoutMs = getAskTimeoutMs();
   accessRegistry;
   audit;
+  bossControlStoreInstance;
   constructor() {
     ensureIntercomRuntimeDir(INTERCOM_DIR);
     acquireBrokerOwnership(OWNER_PATH);
@@ -1138,6 +1417,7 @@ var IntercomBroker = class {
           this.broadcastVisible({ type: "session_left", sessionId }, existing.info, sessionId);
           this.sessions.delete(sessionId);
           this.clearPendingDeliveriesForSession(sessionId, socket);
+          this.clearPendingBossControlsForSession(sessionId, socket);
           this.deferAskEdgesForSession(sessionId);
           this.scheduleShutdownCheck();
         }
@@ -1250,6 +1530,18 @@ var IntercomBroker = class {
           socket.end();
           break;
         }
+        if (clientMessage.compatibility !== void 0) {
+          const compatibility = negotiateBrokerCompatibility(clientMessage.compatibility);
+          if (!compatibility.compatible || compatibility.mode !== "ordinary") {
+            this.sendError(
+              socket,
+              "PROTOCOL_MISMATCH",
+              `Intercom compatibility negotiation failed: ${"code" in compatibility ? compatibility.code : "BOSS_MODE_DORMANT"}`
+            );
+            socket.end();
+            break;
+          }
+        }
         if (currentId) {
           throw new Error("Received duplicate register message");
         }
@@ -1327,6 +1619,7 @@ var IntercomBroker = class {
           }
           if (previous) {
             this.clearPendingDeliveriesForSession(id, previous.socket);
+            this.clearPendingBossControlsForSession(id, previous.socket);
             this.deferAskEdgesForSession(id);
             previous.socket.end();
           }
@@ -1438,6 +1731,7 @@ var IntercomBroker = class {
           this.broadcastVisible({ type: "session_left", sessionId: currentId }, existing.info, currentId);
           this.sessions.delete(currentId);
           this.clearPendingDeliveriesForSession(currentId, socket);
+          this.clearPendingBossControlsForSession(currentId, socket);
           if (clientMessage.preserveAsks) {
             this.deferAskEdgesForSession(currentId);
           } else {
@@ -1618,6 +1912,150 @@ var IntercomBroker = class {
           break;
         }
         this.sendDeliveryFailure(socket, message.id, false, "SESSION_NOT_FOUND", "Session not found");
+        break;
+      }
+      case "boss_control_send": {
+        if (!currentId) throw new Error("Received boss_control_send before register");
+        const rawEnvelope = clientMessage.envelope;
+        const rawMessageId = typeof rawEnvelope === "object" && rawEnvelope !== null && "messageId" in rawEnvelope && typeof rawEnvelope.messageId === "string" ? rawEnvelope.messageId : "unknown";
+        if (typeof clientMessage.to !== "string" || clientMessage.to.length === 0 || clientMessage.to.length > MAX_TARGET_LENGTH) {
+          this.sendBossControlFailure(socket, rawMessageId, false, "INVALID_BOSS_CONTROL", "Invalid Boss control target");
+          break;
+        }
+        const sender = this.sessions.get(currentId);
+        let envelope;
+        try {
+          if (!sender || sender.socket !== socket) throw new Error("Sender session not found");
+          envelope = parseBoundBossControl(rawEnvelope, sender.info);
+        } catch (error) {
+          this.sendBossControlFailure(
+            socket,
+            rawMessageId,
+            false,
+            "INVALID_BOSS_CONTROL",
+            error instanceof Error ? error.message : "Invalid Boss control envelope"
+          );
+          break;
+        }
+        const controlKind = bossControlKind(envelope.type);
+        const senderBoss = validatedBossMetadata(sender.info);
+        const identity = {
+          senderSessionId: currentId,
+          bossRunId: envelope.bossRunId,
+          participantId: envelope.participantId,
+          senderBindingEpoch: envelope.bindingEpoch,
+          idempotencyKey: envelope.idempotencyKey
+        };
+        const key = bossControlIdempotencyScope(identity);
+        const fingerprint = bossControlFingerprint(clientMessage.to, envelope);
+        const durable = this.bossControlStore().get(identity);
+        if (durable) {
+          if (durable.fingerprint !== fingerprint) {
+            this.sendBossControlFailure(socket, envelope.messageId, false, "CONFLICTING_MESSAGE_ID", "Boss control idempotency key was reused with different content");
+            break;
+          }
+          this.writeBossControlReplay(socket, durable, envelope.messageId);
+          if (durable.state !== "accepted") break;
+          const pendingId2 = this.pendingBossControlKeys.get(key);
+          if (pendingId2) {
+            const pending = this.pendingBossControls.get(pendingId2);
+            if (pending) {
+              pending.requesters.set(envelope.messageId, socket);
+              break;
+            }
+          }
+          const target2 = this.sessions.get(durable.targetSessionId);
+          let targetBoss2;
+          try {
+            targetBoss2 = target2 === void 0 ? void 0 : validatedBossMetadata(target2.info);
+          } catch {
+            targetBoss2 = void 0;
+          }
+          if (!target2 || !targetBoss2 || targetBoss2.principal.bindingEpoch !== durable.targetBindingEpoch || !this.isBossControlAuthorized(
+            currentId,
+            durable.targetSessionId,
+            durable.controlKind,
+            durable.senderBindingEpoch,
+            durable.targetBindingEpoch
+          )) {
+            this.failDurableBossControl(
+              durable,
+              "RECIPIENT_DISCONNECTED",
+              "The exact accepted Boss control target is not available at its bound epoch",
+              socket,
+              envelope.messageId
+            );
+            break;
+          }
+          this.activateBossControl(durable, socket, target2.socket, envelope.messageId);
+          break;
+        }
+        const pendingId = this.pendingBossControlKeys.get(key);
+        if (pendingId) {
+          const pending = this.pendingBossControls.get(pendingId);
+          if (!pending || pending.fingerprint !== fingerprint) {
+            this.sendBossControlFailure(socket, envelope.messageId, false, "CONFLICTING_MESSAGE_ID", "Boss control idempotency key is already pending with different content");
+            break;
+          }
+          if (this.isBossControlAuthorized(pending.from, pending.to, pending.controlKind, pending.fromBindingEpoch, pending.toBindingEpoch)) {
+            pending.requesters.set(envelope.messageId, socket);
+            writeMessage(socket, { type: "boss_control_accepted", messageId: envelope.messageId, deliveryId: pending.id });
+            break;
+          }
+          this.failPendingBossControl(pending.id, "BOSS_CONTROL_DENIED", "Boss control authorization changed while pending");
+        }
+        if (this.pendingDeliveries.size + this.pendingBossControls.size >= MAX_PENDING_DELIVERIES || this.countPendingDeliveriesFrom(currentId) + this.countPendingBossControlsFrom(currentId) >= MAX_PENDING_DELIVERIES_PER_SESSION) {
+          this.sendBossControlFailure(socket, envelope.messageId, false, "TOO_MANY_PENDING_DELIVERIES", "Too many deliveries are waiting for acknowledgement");
+          break;
+        }
+        const target = this.sessions.get(clientMessage.to);
+        if (!target) {
+          this.sendBossControlFailure(
+            socket,
+            envelope.messageId,
+            false,
+            "SESSION_NOT_FOUND",
+            "Exact Boss control target session not found"
+          );
+          break;
+        }
+        let targetBoss;
+        try {
+          targetBoss = validatedBossMetadata(target.info);
+        } catch {
+          targetBoss = void 0;
+        }
+        if (!targetBoss || !this.isBossControlAuthorized(
+          currentId,
+          target.info.id,
+          controlKind,
+          senderBoss.principal.bindingEpoch,
+          targetBoss.principal.bindingEpoch
+        )) {
+          this.sendBossControlFailure(socket, envelope.messageId, false, "BOSS_CONTROL_DENIED", "Boss control policy denied the exact target");
+          break;
+        }
+        const deliveryId = randomUUID3();
+        const reserved = this.bossControlStore().reserve({
+          ...identity,
+          targetSessionId: target.info.id,
+          targetBindingEpoch: targetBoss.principal.bindingEpoch,
+          controlKind,
+          envelope,
+          fingerprint,
+          deliveryId,
+          state: "accepted",
+          acceptedAt: (/* @__PURE__ */ new Date()).toISOString()
+        }).record;
+        writeMessage(socket, bossControlAcceptedFrame(reserved, envelope.messageId));
+        this.activateBossControl(reserved, socket, target.socket, envelope.messageId);
+        break;
+      }
+      case "boss_control_received": {
+        if (!currentId) throw new Error("Received boss_control_received before register");
+        assertExactKeys3(clientMessage, ["type", "deliveryId"], [], "$.boss_control_received");
+        if (typeof clientMessage.deliveryId !== "string") throw new Error("Invalid boss_control_received message");
+        this.acknowledgePendingBossControl(clientMessage.deliveryId, currentId, socket);
         break;
       }
       case "message_received": {
@@ -2004,6 +2442,7 @@ var IntercomBroker = class {
         }
       }
       this.clearPendingDeliveriesForSession(principal.id, live.socket);
+      this.clearPendingBossControlsForSession(principal.id, live.socket);
       this.clearAskEdgesForSession(principal.id, "authorization_revoked");
       this.sessions.delete(principal.id);
       for (const [key, recent] of this.recentDeliveries) {
@@ -2040,6 +2479,19 @@ var IntercomBroker = class {
       actorId,
       action,
       targetId
+    ).allowed;
+  }
+  isBossControlAuthorized(actorId, targetId, controlKind, actorBindingEpoch, targetBindingEpoch) {
+    if (!this.isCurrentPrincipal(actorId) || !this.isCurrentPrincipal(targetId)) return false;
+    return authorizeSessionAction(
+      Array.from(this.sessions.values(), (session) => session.info),
+      actorId,
+      "control",
+      targetId,
+      // This adapter has no authenticated Orc/Controller causation ledger in
+      // the current slice. Binding epochs prove identity freshness, not that a
+      // specific Boss operation is correlated, so control must remain denied.
+      { actorBindingEpoch, targetBindingEpoch, controlKind, correlated: false }
     ).allowed;
   }
   broadcastVisible(message, subject, exclude) {
@@ -2152,11 +2604,11 @@ var IntercomBroker = class {
     return timeout;
   }
   loadAskEdges() {
-    if (!existsSync2(ASK_STATE_PATH)) {
+    if (!existsSync3(ASK_STATE_PATH)) {
       return;
     }
     try {
-      const parsed = JSON.parse(readFileSync4(ASK_STATE_PATH, "utf-8"));
+      const parsed = JSON.parse(readFileSync5(ASK_STATE_PATH, "utf-8"));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
         throw new Error("expected an object");
       }
@@ -2231,6 +2683,182 @@ var IntercomBroker = class {
       }
     }
     return count;
+  }
+  countPendingBossControlsFrom(sessionId) {
+    let count = 0;
+    for (const control of this.pendingBossControls.values()) {
+      if (control.from === sessionId) count += 1;
+    }
+    return count;
+  }
+  sendBossControlFailure(socket, messageId, accepted, code, reason, deliveryId) {
+    if (accepted) {
+      if (!deliveryId) throw new Error("Accepted Boss control failure requires deliveryId");
+      writeMessage(socket, { type: "boss_control_failed", messageId, deliveryId, accepted: true, code, reason });
+      return;
+    }
+    if (deliveryId !== void 0) throw new Error("Pre-acceptance Boss control failure cannot contain deliveryId");
+    writeMessage(socket, { type: "boss_control_failed", messageId, accepted: false, code, reason });
+  }
+  bossControlStore() {
+    this.bossControlStoreInstance ??= new DurableBossControlStore(BOSS_CONTROL_STATE_PATH);
+    return this.bossControlStoreInstance;
+  }
+  writeBossControlReplay(socket, record, requestMessageId) {
+    for (const frame of bossControlReplayFrames(record, requestMessageId)) writeMessage(socket, frame);
+  }
+  activateBossControl(record, senderSocket, recipientSocket, requestMessageId) {
+    const key = bossControlIdempotencyScope(record);
+    const timeout = setTimeout(() => {
+      try {
+        this.failPendingBossControl(record.deliveryId, "DELIVERY_TIMEOUT", "Recipient did not acknowledge the Boss control in time");
+      } catch (error) {
+        console.error("Boss control timeout callback failed:", error);
+      }
+    }, DELIVERY_ACK_TIMEOUT_MS);
+    timeout.unref?.();
+    this.pendingBossControls.set(record.deliveryId, {
+      id: record.deliveryId,
+      key,
+      fingerprint: record.fingerprint,
+      envelope: record.envelope,
+      controlKind: record.controlKind,
+      from: record.senderSessionId,
+      to: record.targetSessionId,
+      requesters: /* @__PURE__ */ new Map([[requestMessageId, senderSocket]]),
+      recipientSocket,
+      fromBindingEpoch: record.senderBindingEpoch,
+      toBindingEpoch: record.targetBindingEpoch,
+      timeout
+    });
+    this.pendingBossControlKeys.set(key, record.deliveryId);
+    const sender = this.sessions.get(record.senderSessionId);
+    if (!sender || sender.socket !== senderSocket) {
+      this.failPendingBossControl(record.deliveryId, "SENDER_DISCONNECTED", "Sender disconnected before the Boss control was dispatched");
+      return;
+    }
+    writeMessage(recipientSocket, {
+      type: "boss_control",
+      deliveryId: record.deliveryId,
+      from: sender.info,
+      envelope: record.envelope
+    });
+  }
+  failDurableBossControl(record, code, reason, senderSocket, requestMessageId) {
+    try {
+      const reconciled = this.mutateBossControlTerminal(
+        record,
+        record.deliveryId,
+        "rejection",
+        () => this.bossControlStore().markRejected(record, record.deliveryId, code, reason)
+      );
+      if (!reconciled || reconciled.state === "accepted") return;
+      const socket = senderSocket ?? this.sessions.get(record.senderSessionId)?.socket;
+      if (socket) writeMessage(socket, bossControlTerminalFrame(reconciled, requestMessageId ?? reconciled.envelope.messageId));
+    } catch (error) {
+      console.error("Boss control durable rejection callback failed:", error);
+    }
+  }
+  acknowledgePendingBossControl(deliveryId, sessionId, socket) {
+    try {
+      const pending = this.pendingBossControls.get(deliveryId);
+      if (!pending || pending.to !== sessionId || pending.recipientSocket !== socket) return;
+      if (!this.isBossControlAuthorized(
+        pending.from,
+        pending.to,
+        pending.controlKind,
+        pending.fromBindingEpoch,
+        pending.toBindingEpoch
+      )) {
+        this.failPendingBossControl(deliveryId, "BOSS_CONTROL_DENIED", "Boss control authorization changed before acknowledgement");
+        return;
+      }
+      const identity = this.pendingBossControlIdentity(pending);
+      const reconciled = this.mutateBossControlTerminal(
+        identity,
+        deliveryId,
+        "delivery",
+        () => this.bossControlStore().markDelivered(identity, deliveryId)
+      );
+      this.completePendingBossControl(pending, reconciled);
+    } catch (error) {
+      console.error("Boss control acknowledgement callback failed:", error);
+    }
+  }
+  failPendingBossControl(deliveryId, code, reason) {
+    try {
+      const pending = this.pendingBossControls.get(deliveryId);
+      if (!pending) return;
+      const identity = this.pendingBossControlIdentity(pending);
+      const reconciled = this.mutateBossControlTerminal(
+        identity,
+        deliveryId,
+        "rejection",
+        () => this.bossControlStore().markRejected(identity, deliveryId, code, reason)
+      );
+      this.completePendingBossControl(pending, reconciled);
+    } catch (error) {
+      console.error("Boss control rejection callback failed:", error);
+    }
+  }
+  pendingBossControlIdentity(pending) {
+    return {
+      senderSessionId: pending.from,
+      bossRunId: pending.envelope.bossRunId,
+      participantId: pending.envelope.participantId,
+      senderBindingEpoch: pending.envelope.bindingEpoch,
+      idempotencyKey: pending.envelope.idempotencyKey
+    };
+  }
+  mutateBossControlTerminal(identity, deliveryId, operation, mutate) {
+    try {
+      return mutate();
+    } catch (mutationError) {
+      try {
+        const reconciled = this.bossControlStore().get(identity);
+        if (!reconciled || reconciled.deliveryId !== deliveryId) {
+          console.error(`Boss control ${operation} mutation failed without an exact durable record:`, mutationError);
+          return void 0;
+        }
+        console.error(
+          `Boss control ${operation} mutation threw after reconciling durable state ${reconciled.state}:`,
+          mutationError
+        );
+        return reconciled;
+      } catch (reconcileError) {
+        console.error(`Boss control ${operation} mutation and exact reconciliation failed:`, mutationError, reconcileError);
+        return void 0;
+      }
+    }
+  }
+  completePendingBossControl(pending, reconciled) {
+    if (this.pendingBossControls.get(pending.id) !== pending) return;
+    clearTimeout(pending.timeout);
+    this.pendingBossControls.delete(pending.id);
+    if (this.pendingBossControlKeys.get(pending.key) === pending.id) this.pendingBossControlKeys.delete(pending.key);
+    if (!reconciled || reconciled.state === "accepted") return;
+    const sender = this.sessions.get(pending.from);
+    for (const [messageId, requesterSocket] of pending.requesters) {
+      if (sender?.socket !== requesterSocket) continue;
+      try {
+        writeMessage(requesterSocket, bossControlTerminalFrame(reconciled, messageId));
+      } catch (error) {
+        console.error("Failed to publish reconciled Boss control terminal frame:", error);
+      }
+    }
+  }
+  clearPendingBossControlsForSession(sessionId, socket) {
+    try {
+      for (const control of Array.from(this.pendingBossControls.values())) {
+        if (control.to === sessionId && control.recipientSocket === socket) {
+          this.failPendingBossControl(control.id, "RECIPIENT_DISCONNECTED", "Recipient disconnected before acknowledging the Boss control");
+        } else if (control.from === sessionId && Array.from(control.requesters.values()).includes(socket)) {
+          this.failPendingBossControl(control.id, "SENDER_DISCONNECTED", "Sender disconnected before the Boss control was acknowledged");
+        }
+      }
+    } catch (error) {
+      console.error("Boss control socket-close callback failed:", error);
+    }
   }
   acknowledgePendingDelivery(deliveryId, sessionId, socket) {
     const pending = this.pendingDeliveries.get(deliveryId);
@@ -2342,6 +2970,11 @@ var IntercomBroker = class {
     }
     this.pendingDeliveries.clear();
     this.pendingDeliveryKeys.clear();
+    for (const control of this.pendingBossControls.values()) {
+      clearTimeout(control.timeout);
+    }
+    this.pendingBossControls.clear();
+    this.pendingBossControlKeys.clear();
     for (const edge of this.askEdges.values()) {
       clearTimeout(edge.timeout);
     }
@@ -2371,4 +3004,9 @@ var IntercomBroker = class {
     process.exit(0);
   }
 };
-new IntercomBroker().start();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  new IntercomBroker().start();
+}
+export {
+  IntercomBroker
+};

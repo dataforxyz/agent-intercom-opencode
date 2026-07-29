@@ -4,6 +4,9 @@
   "description": "OpenCode plugin for direct local messaging with Pi, Codex, Claude, and OpenCode coding-agent sessions.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "main": "dist/plugin.mjs",
   "exports": {
     ".": "./dist/plugin.mjs",
@@ -32,7 +35,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepare": "npm run build",
-    "test": "tsx --test broker/*.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts",
+    "test": "tsx --test broker/*.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/notice-ingress.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -44,14 +47,17 @@
     "claude"
   ],
   "dependencies": {
-    "@dataforxyz/agent-intercom-core": "git+https://github.com/dataforxyz/agent-intercom-core.git#cb5d2212912db0cd8abbb16ab08e4b539424a05d",
     "@opencode-ai/plugin": "^1.17.15"
   },
   "devDependencies": {
+    "@dataforxyz/agent-intercom-core": "git+https://github.com/dataforxyz/agent-intercom-core.git#8316cbab548f422ad11c78ed887fabeef94817c1",
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.1",
     "tsx": "^4.20.0",
     "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@dataforxyz/agent-intercom-core": "0.1.0"
   },
   "publishConfig": {
     "access": "public"

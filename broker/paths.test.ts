@@ -11,6 +11,7 @@ import {
   getBrokerAdminCredentialFilePath,
   getBrokerAskStateFilePath,
   getBrokerAuditFilePath,
+  getBrokerBossControlStateFilePath,
   getBrokerListenTarget,
   getBrokerPortFilePath,
   getBrokerSocketPath,
@@ -41,6 +42,7 @@ test("getAgentDirPath resolves relative PI_CODING_AGENT_DIR values from the call
 test("getIntercomDirPath points at the intercom runtime directory under the agent dir", () => {
   assert.equal(getIntercomDirPath("/tmp/pi-agent"), join("/tmp/pi-agent", "intercom"));
   assert.equal(getBrokerAskStateFilePath("/tmp/pi-agent/intercom"), join("/tmp/pi-agent/intercom", "broker-asks.json"));
+  assert.equal(getBrokerBossControlStateFilePath("/tmp/pi-agent/intercom"), join("/tmp/pi-agent/intercom", "broker-boss-controls.json"));
   assert.equal(getBrokerAccessStateFilePath("/tmp/pi-agent/intercom"), join("/tmp/pi-agent/intercom", "broker-access.json"));
   assert.equal(getBrokerAdminCredentialFilePath("/tmp/pi-agent/intercom"), join("/tmp/pi-agent/intercom", "broker-admin.json"));
   assert.equal(getBrokerAuditFilePath("/tmp/pi-agent/intercom"), join("/tmp/pi-agent/intercom", "broker-audit.jsonl"));

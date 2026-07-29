@@ -6,6 +6,20 @@ import { invokeAgentFleet, isFleetManagementEnabled } from "./fleet.ts";
 import { startOpenCodeControlServer } from "./control.ts";
 import { validateAskTimeoutMs } from "../config.ts";
 
+// Public, bundled contract surface. Production creation intentionally fails
+// closed until the protected authority client and typed notice ingress exist.
+export {
+  createProductionOpenCodeNoticeRecipientIngress,
+  DurableOpenCodeNoticeIngressStore,
+  getOpenCodeNoticeIngressStatePath,
+  OpenCodeNoticeAuthorityUnavailableError,
+  OpenCodeNoticeCurrentClaimUnavailableError,
+  OpenCodeNoticeRecipientIngress,
+  OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE,
+  OPENCODE_NOTICE_CURRENT_CLAIM_EVIDENCE_VERSION,
+  OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE,
+} from "./notice-ingress.ts";
+
 const INJECT_LOG_PATH = "/tmp/intercom-inject.log";
 
 interface PendingInjectEntry {

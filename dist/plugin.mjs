@@ -12,182 +12,105 @@ import { cwd as processCwd } from "process";
 import { EventEmitter } from "events";
 import net from "net";
 import { randomUUID as randomUUID2 } from "crypto";
+import { types as nodeUtilTypes } from "node:util";
+import {
+  POLICY_SEMANTICS_HASH,
+  POLICY_SEMANTICS_VERSION
+} from "@dataforxyz/agent-intercom-core";
+import {
+  parseBossControlEnvelope as parseBossControlEnvelope2
+} from "@dataforxyz/agent-intercom-core/boss";
+import { assertExactKeys as assertExactKeys2 } from "@dataforxyz/agent-intercom-core/canonical";
 
-// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy.js
-var POLICY_SEMANTICS_VERSION = 2;
-
-// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
-var localRoot = {
-  id: "local-root",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-root"
+// broker/boss.ts
+import {
+  BOSS_CONTROL_TYPES,
+  parseBossControlEnvelope,
+  parseBossParticipantBinding,
+  parseBossPolicyPrincipal,
+  parseFeatureRegistration
+} from "@dataforxyz/agent-intercom-core/boss";
+import {
+  ContractValidationError,
+  assertExactKeys,
+  assertRecord
+} from "@dataforxyz/agent-intercom-core/canonical";
+var CONTROL_KIND_BY_TYPE = {
+  "boss.assignment.created": "assignment_request",
+  "boss.assignment.accepted": "assignment_response",
+  "boss.assignment.checkpoint": "assignment_response",
+  "boss.assignment.submitted": "assignment_response",
+  "boss.assignment.rejected": "assignment_response",
+  "boss.assignment.cancelled": "lifecycle",
+  "boss.staffing.requested": "staffing",
+  "boss.staffing.resolved": "staffing",
+  "boss.review.requested": "review_request",
+  "boss.review.submitted": "review_result",
+  "boss.council.requested": "review_request",
+  "boss.council.submitted": "review_result",
+  "boss.proof.submitted": "proof",
+  "boss.worker.health": "health",
+  "boss.worker.blocked": "health",
+  "boss.worker.failed": "health",
+  "boss.worker.notice": "lifecycle",
+  "boss.worker.notice_delivery_failed": "lifecycle",
+  "boss.decision.required": "decision"
 };
-var localPeer = {
-  id: "local-peer",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-peer"
-};
-var remoteManager = {
-  id: "remote-manager",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "local-root",
-  rootSessionId: "local-root"
-};
-var remoteChild = {
-  id: "remote-child",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var remoteSibling = {
-  id: "remote-sibling",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var POLICY_VECTORS = [
-  {
-    name: "local sessions remain public",
-    principals: [localRoot, localPeer],
-    actorId: "local-root",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: true,
-    expectedReasonOrCode: "local-public"
-  },
-  {
-    name: "remote manager can reach direct local parent",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "local parent can reach direct remote child",
-    principals: [localRoot, remoteManager],
-    actorId: "local-root",
-    action: "ask",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "remote child can reach its local root through the ancestor chain",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-chain"
-  },
-  {
-    name: "remote siblings cannot communicate in phase one",
-    principals: [localRoot, remoteManager, remoteChild, remoteSibling],
-    actorId: "remote-child",
-    action: "discover",
-    targetId: "remote-sibling",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "unrelated local session cannot discover remote principal",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "local-peer",
-    action: "discover",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal cannot reach unrelated local session",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote manager may inspect its descendant subtree",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-manager",
-    action: "inspect_tree",
-    targetId: "remote-child",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-control"
-  },
-  {
-    name: "remote child cannot revoke its ancestor",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "revoke",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal may request attenuated delegation under itself",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "delegate_child",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "self"
-  },
-  {
-    name: "revoked principal cannot communicate",
-    principals: [localRoot, { ...remoteManager, state: "revoked" }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: false,
-    expectedReasonOrCode: "REVOKED_PRINCIPAL"
-  },
-  {
-    name: "stale actor generation cannot send",
-    principals: [localRoot, { ...remoteManager, generation: 2 }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    context: { actorGeneration: 1 },
-    expectedAllowed: false,
-    expectedReasonOrCode: "STALE_GENERATION"
+if (Object.keys(CONTROL_KIND_BY_TYPE).length !== BOSS_CONTROL_TYPES.length) {
+  throw new Error("Boss control type mapping is incomplete");
+}
+function parseBossSessionMetadata(value, sessionId) {
+  assertRecord(value, "$.boss");
+  assertExactKeys(value, ["registration", "principal"], ["binding"], "$.boss");
+  const metadata = value;
+  const registration = parseFeatureRegistration(metadata.registration);
+  const principal = parseBossPolicyPrincipal(metadata.principal);
+  if (registration.principalClass !== "boss-bound" || principal.principalClass !== "boss-private") {
+    throw new ContractValidationError("$.boss", "must contain Boss-bound registration and private principal metadata");
   }
-];
-var POLICY_SEMANTICS_HASH = "f3b00e503631bc91123aedfbcf1df72cc9913e1893c09728b2c598f3dcdfdfe0";
+  if (registration.principalId !== sessionId || principal.principalId !== sessionId || registration.bossRunId !== principal.bossRunId || registration.participantId !== principal.participantId || registration.bindingEpoch !== principal.bindingEpoch) {
+    throw new ContractValidationError("$.boss", "registration and principal identity bindings must exactly match the session");
+  }
+  const binding = metadata.binding === void 0 ? void 0 : parseBossParticipantBinding(metadata.binding);
+  if (principal.role === "controller") {
+    if (binding !== void 0) throw new ContractValidationError("$.boss.binding", "is forbidden for Controller principals");
+  } else {
+    if (binding === void 0) throw new ContractValidationError("$.boss.binding", "is required for Boss participants");
+    if (binding.sessionId !== sessionId || binding.bossRunId !== principal.bossRunId || binding.participantId !== principal.participantId || binding.role !== principal.role || binding.bindingEpoch !== principal.bindingEpoch || binding.state !== principal.state || binding.assignedManagerParticipantId !== principal.assignedManagerParticipantId) {
+      throw new ContractValidationError("$.boss.binding", "must exactly match the authenticated session principal");
+    }
+  }
+  return { registration, principal, ...binding === void 0 ? {} : { binding } };
+}
+function validatedBossMetadata(session) {
+  if (session.boss === void 0) return void 0;
+  return parseBossSessionMetadata(session.boss, session.id);
+}
+function parseBoundBossControl(value, sender) {
+  const envelope = parseBossControlEnvelope(value);
+  const boss = validatedBossMetadata(sender);
+  if (!boss) throw new ContractValidationError("$.envelope", "sender is not an authenticated Boss participant");
+  if (envelope.bossRunId !== boss.principal.bossRunId || envelope.participantId !== boss.principal.participantId || envelope.bindingEpoch !== boss.principal.bindingEpoch) {
+    throw new ContractValidationError("$.envelope", "run, participant, and binding epoch must match the sender");
+  }
+  return envelope;
+}
 
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
 function writeMessage(socket, msg) {
   const json = JSON.stringify(msg);
-  const payload = Buffer.from(json, "utf-8");
+  const payload2 = Buffer.from(json, "utf-8");
   const header = Buffer.alloc(4);
-  header.writeUInt32BE(payload.length, 0);
-  socket.write(Buffer.concat([header, payload]));
+  header.writeUInt32BE(payload2.length, 0);
+  socket.write(Buffer.concat([header, payload2]));
 }
 function createMessageReader(onMessage, onError, maxFrameBytes = MAX_FRAME_BYTES) {
   let buffer = Buffer.alloc(0);
-  function reportMessage(payload) {
+  function reportMessage(payload2) {
     let msg;
     try {
-      msg = JSON.parse(payload.toString("utf-8"));
+      msg = JSON.parse(payload2.toString("utf-8"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onError(new Error(`Failed to parse intercom message: ${message}`, { cause: error }));
@@ -228,9 +151,9 @@ function createMessageReader(onMessage, onError, maxFrameBytes = MAX_FRAME_BYTES
       if (buffer.length < 4 + length) {
         return;
       }
-      const payload = buffer.subarray(4, 4 + length);
+      const payload2 = buffer.subarray(4, 4 + length);
       buffer = Buffer.alloc(0);
-      if (!reportMessage(payload)) {
+      if (!reportMessage(payload2)) {
         return;
       }
     }
@@ -316,23 +239,44 @@ function restrictIntercomRuntimeFile(filePath, platform = process.platform) {
 import { randomUUID } from "crypto";
 import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from "fs";
 import { dirname } from "path";
-function writeDurableJson(filePath, value) {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify(value), { encoding: "utf-8", mode: INTERCOM_RUNTIME_FILE_MODE });
-  const fileDescriptor = openSync(temporaryPath, "r");
-  try {
+var DURABLE_JSON_FILE_OPERATIONS = Object.freeze({
+  writeFile(filePath, contents, options) {
+    writeFileSync(filePath, contents, options);
+  },
+  open(filePath, flags) {
+    return openSync(filePath, flags);
+  },
+  fsync(fileDescriptor) {
     fsyncSync(fileDescriptor);
-  } finally {
+  },
+  close(fileDescriptor) {
     closeSync(fileDescriptor);
+  },
+  rename(from, to) {
+    renameSync(from, to);
+  },
+  restrict(filePath) {
+    restrictIntercomRuntimeFile(filePath);
+  },
+  platform: process.platform
+});
+function writeDurableJson(filePath, value, operations = DURABLE_JSON_FILE_OPERATIONS) {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  operations.writeFile(temporaryPath, JSON.stringify(value), { encoding: "utf-8", mode: INTERCOM_RUNTIME_FILE_MODE });
+  const fileDescriptor = operations.open(temporaryPath, "r");
+  try {
+    operations.fsync(fileDescriptor);
+  } finally {
+    operations.close(fileDescriptor);
   }
-  renameSync(temporaryPath, filePath);
-  restrictIntercomRuntimeFile(filePath);
-  if (process.platform !== "win32") {
-    const directoryDescriptor = openSync(dirname(filePath), "r");
+  operations.rename(temporaryPath, filePath);
+  operations.restrict(filePath);
+  if (operations.platform !== "win32") {
+    const directoryDescriptor = operations.open(dirname(filePath), "r");
     try {
-      fsyncSync(directoryDescriptor);
+      operations.fsync(directoryDescriptor);
     } finally {
-      closeSync(directoryDescriptor);
+      operations.close(directoryDescriptor);
     }
   }
 }
@@ -508,6 +452,28 @@ function isMessage(value) {
   }
   return content.attachments === void 0 || Array.isArray(content.attachments) && content.attachments.every(isAttachment);
 }
+var PRE_ACCEPT_BOSS_CONTROL_FAILURE_CODES = [
+  "INVALID_BOSS_CONTROL",
+  "SESSION_NOT_FOUND",
+  "CONFLICTING_MESSAGE_ID",
+  "TOO_MANY_PENDING_DELIVERIES",
+  "BOSS_CONTROL_DENIED"
+];
+var POST_ACCEPT_BOSS_CONTROL_FAILURE_CODES = [
+  "BOSS_CONTROL_DENIED",
+  "RECIPIENT_DISCONNECTED",
+  "SENDER_DISCONNECTED",
+  "DELIVERY_TIMEOUT"
+];
+function isBossControlFailureCode(value, accepted) {
+  return typeof value === "string" && (accepted ? POST_ACCEPT_BOSS_CONTROL_FAILURE_CODES : PRE_ACCEPT_BOSS_CONTROL_FAILURE_CODES).includes(value);
+}
+function exactBossControlFrame(frame, required, path) {
+  assertExactKeys2(frame, required, [], path);
+}
+function bossControlFrameString(value, path) {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${path} must be a non-empty string`);
+}
 function isSessionInfo(value) {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -535,7 +501,104 @@ function isSessionInfo(value) {
   for (const field of ["depth", "maxDepth", "maxChildren"]) {
     if (session[field] !== void 0 && (typeof session[field] !== "number" || !Number.isSafeInteger(session[field]))) return false;
   }
-  return true;
+  return session.boss === void 0;
+}
+var BOSS_SESSION_REQUIRED_FIELDS = [
+  "id",
+  "cwd",
+  "model",
+  "pid",
+  "startedAt",
+  "lastActivity",
+  "boss"
+];
+var BOSS_SESSION_OPTIONAL_FIELDS = [
+  "name",
+  "status",
+  "peerUid",
+  "trustedLocal",
+  "origin",
+  "remoteHostId",
+  "parentSessionId",
+  "rootSessionId",
+  "generation",
+  "canDelegate",
+  "depth",
+  "maxDepth",
+  "maxChildren"
+];
+function snapshotBossData(value, path, seen = /* @__PURE__ */ new WeakSet(), depth = 0) {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || Object.is(value, -0)) throw new Error(`${path} must be a JSON number`);
+    return value;
+  }
+  if (typeof value !== "object" || nodeUtilTypes.isProxy(value)) {
+    throw new Error(`${path} must be unproxied broker-owned data`);
+  }
+  if (depth >= 32 || seen.has(value)) throw new Error(`${path} must be an acyclic bounded data tree`);
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error(`${path} must be a plain array`);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (lengthDescriptor === void 0 || !Object.hasOwn(lengthDescriptor, "value") || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+      throw new Error(`${path} must be a dense array`);
+    }
+    const entries = /* @__PURE__ */ new Map();
+    for (const key of Reflect.ownKeys(value)) {
+      if (key === "length") continue;
+      if (typeof key !== "string") throw new Error(`${path} must not contain symbol properties`);
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0 || index >= lengthDescriptor.value || String(index) !== key) {
+        throw new Error(`${path}.${key} is not a supported array index`);
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === void 0 || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) {
+        throw new Error(`${path}[${index}] must be an enumerable data property`);
+      }
+      entries.set(index, snapshotBossData(descriptor.value, `${path}[${index}]`, seen, depth + 1));
+    }
+    if (entries.size !== lengthDescriptor.value) throw new Error(`${path} must not contain sparse array holes`);
+    return Array.from({ length: lengthDescriptor.value }, (_, index) => entries.get(index));
+  }
+  if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error(`${path} must be a plain object`);
+  const snapshot = {};
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") throw new Error(`${path} must not contain symbol properties`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === void 0 || !descriptor.enumerable || !Object.hasOwn(descriptor, "value")) {
+      throw new Error(`${path}.${key} must be an enumerable data property`);
+    }
+    Object.defineProperty(snapshot, key, {
+      configurable: true,
+      enumerable: true,
+      value: snapshotBossData(descriptor.value, `${path}.${key}`, seen, depth + 1),
+      writable: true
+    });
+  }
+  return snapshot;
+}
+function authoritativeBossSessionInfo(value) {
+  try {
+    const snapshot = snapshotBossData(value, "$.boss_control.from");
+    if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) return void 0;
+    const session = snapshot;
+    assertExactKeys2(
+      session,
+      [...BOSS_SESSION_REQUIRED_FIELDS],
+      [...BOSS_SESSION_OPTIONAL_FIELDS],
+      "$.boss_control.from"
+    );
+    const { boss, ...ordinaryFields } = session;
+    if (!isSessionInfo(ordinaryFields)) return void 0;
+    const parsedBoss = parseBossSessionMetadata(boss, ordinaryFields.id);
+    if (parsedBoss.registration.state !== "active" || !parsedBoss.registration.brokerIdentityVerified || parsedBoss.principal.state !== "active" || parsedBoss.binding !== void 0 && parsedBoss.binding.state !== "active") {
+      return void 0;
+    }
+    return { ...ordinaryFields, boss: parsedBoss };
+  } catch {
+    return void 0;
+  }
 }
 function isRemoteAccessMetadata(value) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -548,6 +611,7 @@ var IntercomClient = class extends EventEmitter {
   pendingSends = /* @__PURE__ */ new Map();
   pendingLists = /* @__PURE__ */ new Map();
   pendingAskControls = /* @__PURE__ */ new Map();
+  pendingBossControls = /* @__PURE__ */ new Map();
   outbox = null;
   remoteAccessCredential;
   disconnecting = false;
@@ -566,6 +630,8 @@ var IntercomClient = class extends EventEmitter {
       pending.resolve(false);
     }
     this.pendingAskControls.clear();
+    for (const pending of this.pendingBossControls.values()) pending.reject(error);
+    this.pendingBossControls.clear();
   }
   get sessionId() {
     return this._sessionId;
@@ -724,6 +790,9 @@ var IntercomClient = class extends EventEmitter {
         if (typeof brokerMessage.sessionId !== "string" || brokerMessage.protocol !== INTERCOM_PROTOCOL_NAME || brokerMessage.version !== INTERCOM_PROTOCOL_VERSION) {
           throw new Error("Invalid registered message");
         }
+        if (brokerMessage.boss !== void 0 || brokerMessage.capabilities !== void 0) {
+          throw new Error("Ordinary registration must not contain feature or Boss metadata");
+        }
         if (this._sessionId !== null) {
           throw new Error("Received duplicate registered message");
         }
@@ -770,6 +839,75 @@ var IntercomClient = class extends EventEmitter {
           throw new Error("Invalid message event");
         }
         this.emit("message", from, message, deliveryId);
+        break;
+      }
+      case "boss_control": {
+        const { deliveryId, envelope } = brokerMessage;
+        const from = authoritativeBossSessionInfo(brokerMessage.from);
+        if (typeof deliveryId !== "string" || from === void 0) throw new Error("Invalid boss_control event");
+        const parsed = parseBoundBossControl(
+          snapshotBossData(envelope, "$.boss_control.envelope"),
+          from
+        );
+        this.emit("boss_control", from, parsed, deliveryId);
+        break;
+      }
+      case "boss_control_accepted": {
+        exactBossControlFrame(brokerMessage, ["type", "messageId", "deliveryId"], "$.boss_control_accepted");
+        const { deliveryId, messageId } = brokerMessage;
+        bossControlFrameString(deliveryId, "$.boss_control_accepted.deliveryId");
+        bossControlFrameString(messageId, "$.boss_control_accepted.messageId");
+        const pending = this.pendingBossControls.get(messageId);
+        if (!pending) break;
+        if (pending.accepted) throw new Error("Duplicate Boss control acceptance");
+        if (pending.deliveryId !== void 0) throw new Error("Boss control acceptance state is contradictory");
+        pending.accepted = true;
+        pending.deliveryId = deliveryId;
+        break;
+      }
+      case "boss_control_delivered": {
+        exactBossControlFrame(brokerMessage, ["type", "messageId", "deliveryId"], "$.boss_control_delivered");
+        const { deliveryId, messageId } = brokerMessage;
+        bossControlFrameString(deliveryId, "$.boss_control_delivered.deliveryId");
+        bossControlFrameString(messageId, "$.boss_control_delivered.messageId");
+        const pending = this.pendingBossControls.get(messageId);
+        if (!pending) break;
+        if (!pending.accepted || pending.deliveryId !== deliveryId) {
+          throw new Error("Boss control delivery did not follow matching acceptance");
+        }
+        this.pendingBossControls.delete(messageId);
+        pending.resolve({ id: messageId, accepted: true, delivered: true, deliveryId });
+        break;
+      }
+      case "boss_control_failed": {
+        const { accepted } = brokerMessage;
+        if (typeof accepted !== "boolean") throw new Error("Invalid boss_control_failed message");
+        exactBossControlFrame(
+          brokerMessage,
+          accepted ? ["type", "messageId", "deliveryId", "accepted", "code", "reason"] : ["type", "messageId", "accepted", "code", "reason"],
+          "$.boss_control_failed"
+        );
+        const { code, deliveryId, messageId, reason } = brokerMessage;
+        if (!isBossControlFailureCode(code, accepted) || typeof reason !== "string" || reason.length === 0) {
+          throw new Error("Invalid boss_control_failed message");
+        }
+        bossControlFrameString(messageId, "$.boss_control_failed.messageId");
+        if (accepted) bossControlFrameString(deliveryId, "$.boss_control_failed.deliveryId");
+        const pending = this.pendingBossControls.get(messageId);
+        if (!pending) break;
+        if (accepted !== pending.accepted) throw new Error("Boss control failure acceptance state is inconsistent");
+        if (accepted && pending.deliveryId !== deliveryId) {
+          throw new Error("Boss control failure did not follow matching acceptance");
+        }
+        this.pendingBossControls.delete(messageId);
+        pending.resolve({
+          id: messageId,
+          accepted,
+          delivered: false,
+          code,
+          reason,
+          ...accepted ? { deliveryId } : {}
+        });
         break;
       }
       case "delivery_accepted": {
@@ -1022,8 +1160,55 @@ var IntercomClient = class extends EventEmitter {
       }
     });
   }
+  sendBossControl(to, envelopeValue) {
+    let socket;
+    try {
+      socket = this.requireActiveSocket();
+    } catch (error) {
+      return Promise.reject(toError(error));
+    }
+    let envelope;
+    try {
+      envelope = parseBossControlEnvelope2(envelopeValue);
+    } catch (error) {
+      return Promise.reject(toError(error));
+    }
+    if (this.pendingBossControls.has(envelope.messageId)) {
+      return Promise.resolve({
+        id: envelope.messageId,
+        accepted: false,
+        delivered: false,
+        code: "CONFLICTING_MESSAGE_ID",
+        reason: `Boss control message ID ${envelope.messageId} is already pending`
+      });
+    }
+    return new Promise((resolve3, reject) => {
+      const timeout = setTimeout(() => {
+        if (!this.pendingBossControls.delete(envelope.messageId)) return;
+        reject(new Error("Boss control send timeout"));
+      }, 1e4);
+      const wrappedResolve = (result) => {
+        clearTimeout(timeout);
+        resolve3(result);
+      };
+      const wrappedReject = (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      };
+      this.pendingBossControls.set(envelope.messageId, { accepted: false, resolve: wrappedResolve, reject: wrappedReject });
+      try {
+        writeMessage(socket, { type: "boss_control_send", to, envelope });
+      } catch (error) {
+        this.pendingBossControls.delete(envelope.messageId);
+        wrappedReject(toError(error));
+      }
+    });
+  }
   acknowledgeMessage(deliveryId) {
     return this.writeControlMessage({ type: "message_received", deliveryId });
+  }
+  acknowledgeBossControl(deliveryId) {
+    return this.writeControlMessage({ type: "boss_control_received", deliveryId });
   }
   rejectMessage(deliveryId, reason) {
     return this.writeControlMessage({ type: "message_rejected", deliveryId, code: "CONFLICTING_MESSAGE_ID", reason });
@@ -1097,6 +1282,10 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import net2 from "net";
 import { randomUUID as randomUUID3 } from "crypto";
+import {
+  POLICY_SEMANTICS_HASH as POLICY_SEMANTICS_HASH2,
+  POLICY_SEMANTICS_VERSION as POLICY_SEMANTICS_VERSION2
+} from "@dataforxyz/agent-intercom-core";
 var INTERCOM_DIR = getIntercomDirPath();
 var EXTENSION_DIR = join3(dirname2(fileURLToPath(import.meta.url)), "..");
 var BROKER_PID = join3(INTERCOM_DIR, "broker.pid");
@@ -1158,7 +1347,7 @@ function isBrokerHealthOkMessage(message, requestId) {
   const remoteAccess = response.remoteAccess;
   if (typeof remoteAccess !== "object" || remoteAccess === null || Array.isArray(remoteAccess)) return false;
   const contract = remoteAccess;
-  return contract.feature === "remote-access-v1" && contract.policySemanticsVersion === POLICY_SEMANTICS_VERSION && contract.policySemanticsHash === POLICY_SEMANTICS_HASH;
+  return contract.feature === "remote-access-v1" && contract.policySemanticsVersion === POLICY_SEMANTICS_VERSION2 && contract.policySemanticsHash === POLICY_SEMANTICS_HASH2;
 }
 function writeWindowsHiddenLauncher(commandLine, launcherPath = getWindowsHiddenLauncherPath()) {
   ensureIntercomRuntimeDir(dirname2(launcherPath));
@@ -2272,6 +2461,680 @@ function startOpenCodeControlServer(options) {
   return () => clearInterval(timer);
 }
 
+// opencode/notice-ingress.ts
+import { createHash as createHash3, randomUUID as randomUUID6 } from "node:crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync8 } from "node:fs";
+import { dirname as dirname5, join as join8 } from "node:path";
+import {
+  parseDeliveryClaimRecord,
+  parseNoticeRecipientIngressEnvelope,
+  parseTargetLedgerLookupResult
+} from "@dataforxyz/agent-intercom-core/boss";
+import {
+  canonicalJson,
+  assertExactKeys as assertExactKeys3,
+  assertRecord as assertRecord2
+} from "@dataforxyz/agent-intercom-core/canonical";
+var OPENCODE_NOTICE_ATOMIC_INSERTION_VERSION = "opencode.notice-atomic-insertion.v1";
+var OPENCODE_NOTICE_CURRENT_CLAIM_EVIDENCE_VERSION = "opencode.notice-current-claim-evidence.v1";
+var OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE = "OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE";
+var OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE = "OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE";
+var INSERTION_FENCING_UNAVAILABLE = "INSERTION_FENCING_UNAVAILABLE";
+var OpenCodeNoticeAuthorityUnavailableError = class extends Error {
+  code = OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE;
+  constructor() {
+    super("OpenCode Boss notice ingress is unavailable until an authenticated Orc/Controller authority client and typed notice-to-prompt entrypoint are provided");
+    this.name = "OpenCodeNoticeAuthorityUnavailableError";
+  }
+};
+var OpenCodeNoticeCurrentClaimUnavailableError = class extends Error {
+  code = OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE;
+  retryable = true;
+  constructor(reason, options) {
+    super(`OpenCode Boss notice insertion requires a new authenticated reservation before retry: ${reason}`, options);
+    this.name = "OpenCodeNoticeCurrentClaimUnavailableError";
+  }
+};
+var OpenCodeNoticeInsertionFencingUnavailableError = class extends Error {
+  code = INSERTION_FENCING_UNAVAILABLE;
+  retryable = true;
+  constructor() {
+    super("OpenCode Boss notice insertion is unavailable without a protected authenticated atomic current-claim/deadline-bound insertion authority");
+    this.name = "OpenCodeNoticeInsertionFencingUnavailableError";
+  }
+};
+function createProductionOpenCodeNoticeRecipientIngress() {
+  throw new OpenCodeNoticeAuthorityUnavailableError();
+}
+function emptyState() {
+  return { version: 1, records: /* @__PURE__ */ Object.create(null) };
+}
+function collisionResistantName(value) {
+  return createHash3("sha256").update(value).digest("hex");
+}
+function getOpenCodeNoticeIngressStatePath(sessionId, intercomDir = getIntercomDirPath()) {
+  return join8(intercomDir, `opencode-notice-ingress-${collisionResistantName(sessionId)}.json`);
+}
+function ownRecord(value, path) {
+  assertRecord2(value, path);
+  return value;
+}
+function exactKeys(value, required, optional, path) {
+  assertExactKeys3(value, required, optional, path);
+}
+function payload(envelope) {
+  return envelope.payload;
+}
+function timestamp(value, path) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) throw new Error(`${path} must be a timestamp`);
+  return value;
+}
+function nonEmptyString2(value, path) {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${path} must be a non-empty string`);
+  return value;
+}
+function assertSame(actual, expected, field, context) {
+  if (actual !== expected) throw new Error(`${context} ${field} does not match the winning claim`);
+}
+function assertReservationMatches(envelope, claim) {
+  if (envelope.operation !== "reserve_delivery") throw new Error("Expected reserve_delivery before prompt injection");
+  if (claim.state !== "reserved") throw new Error("Notice delivery claim must be reserved before prompt injection");
+  if (claim.recipientContext !== "opencode") throw new Error("Notice delivery claim is not for OpenCode");
+  const request = payload(envelope);
+  const comparisons = [
+    [claim.deliveryGroupId, request.deliveryGroupId, "deliveryGroupId"],
+    [claim.membershipRevision, request.membershipRevision, "membershipRevision"],
+    [claim.effectiveDeliveryIntent, request.effectiveDeliveryIntent, "effectiveDeliveryIntent"],
+    [claim.primaryNoticeId, request.primaryNoticeId, "primaryNoticeId"],
+    [claim.recipientContext, request.recipientContext, "recipientContext"],
+    [claim.recipientSessionId, request.recipientSessionId, "recipientSessionId"],
+    [claim.recipientTargetSessionId, request.recipientTargetSessionId, "recipientTargetSessionId"],
+    [claim.recipientPrincipalId, request.recipientPrincipalId, "recipientPrincipalId"],
+    [claim.recipientBindingEpoch, request.recipientBindingEpoch, "recipientBindingEpoch"],
+    [claim.recipientTransferGeneration, request.recipientTransferGeneration, "recipientTransferGeneration"],
+    [claim.workerGeneration, request.workerGeneration, "workerGeneration"]
+  ];
+  for (const [actual, expected, field] of comparisons) assertSame(actual, expected, field, "Reserved notice claim");
+  if (canonicalJson(claim.memberNoticeIds) !== canonicalJson(request.memberNoticeIds)) {
+    throw new Error("Reserved notice claim memberNoticeIds do not match the ingress request");
+  }
+  if (Date.parse(timestamp(request.requestedAt, "$.payload.requestedAt")) >= Date.parse(claim.expiresAt)) {
+    throw new Error("Notice reservation was requested after the winning claim expired");
+  }
+}
+function assertWallClockFresh(claim, now) {
+  if (Date.parse(claim.expiresAt) <= now) {
+    throw new OpenCodeNoticeCurrentClaimUnavailableError("the winning delivery claim is wall-clock expired");
+  }
+}
+function atomicInsertionRequest(record, insertion, now) {
+  return {
+    version: OPENCODE_NOTICE_ATOMIC_INSERTION_VERSION,
+    requestNonce: randomUUID6(),
+    requestedAt: new Date(now).toISOString(),
+    claim: structuredClone(record.claim),
+    insertion: structuredClone(insertion)
+  };
+}
+function parseInsertionReceipt(value, path) {
+  const receipt = ownRecord(value, path);
+  exactKeys(receipt, ["deliveryClaimId", "claimGeneration", "targetLedgerEntryId", "insertedAt"], [], path);
+  const claimGeneration = receipt.claimGeneration;
+  if (!Number.isSafeInteger(claimGeneration) || claimGeneration < 0) {
+    throw new Error(`${path}.claimGeneration must be a non-negative safe integer`);
+  }
+  return {
+    deliveryClaimId: nonEmptyString2(receipt.deliveryClaimId, `${path}.deliveryClaimId`),
+    claimGeneration,
+    targetLedgerEntryId: nonEmptyString2(receipt.targetLedgerEntryId, `${path}.targetLedgerEntryId`),
+    insertedAt: timestamp(receipt.insertedAt, `${path}.insertedAt`)
+  };
+}
+function parseAtomicInsertionResult(value) {
+  const result = ownRecord(value, "$atomicInsertionResult");
+  exactKeys(
+    result,
+    ["version", "requestNonce", "status"],
+    ["claim", "receipt"],
+    "$atomicInsertionResult"
+  );
+  if (result.version !== OPENCODE_NOTICE_ATOMIC_INSERTION_VERSION) {
+    throw new Error("Unsupported OpenCode atomic insertion result version");
+  }
+  const status = result.status;
+  if (status !== "inserted" && status !== "revoked" && status !== "superseded" && status !== "expired") {
+    throw new Error("$atomicInsertionResult.status is invalid");
+  }
+  const claim = result.claim === void 0 ? void 0 : parseDeliveryClaimRecord(result.claim);
+  const receipt = result.receipt === void 0 ? void 0 : parseInsertionReceipt(result.receipt, "$atomicInsertionResult.receipt");
+  if (status === "inserted" ? claim === void 0 || receipt === void 0 : claim !== void 0 || receipt !== void 0) {
+    throw new Error("$atomicInsertionResult claim and receipt are present exactly for inserted status");
+  }
+  return {
+    version: OPENCODE_NOTICE_ATOMIC_INSERTION_VERSION,
+    requestNonce: nonEmptyString2(result.requestNonce, "$atomicInsertionResult.requestNonce"),
+    status,
+    ...claim === void 0 ? {} : { claim },
+    ...receipt === void 0 ? {} : { receipt }
+  };
+}
+function assertAtomicInsertionResultMatches(record, request, result) {
+  if (result.requestNonce !== request.requestNonce) {
+    throw new OpenCodeNoticeCurrentClaimUnavailableError("atomic insertion result does not bind the fresh request nonce");
+  }
+  if (result.status !== "inserted" || !result.claim || !result.receipt) {
+    throw new OpenCodeNoticeCurrentClaimUnavailableError(`the authenticated winning claim is ${result.status}`);
+  }
+  if (canonicalJson(result.claim) !== canonicalJson(record.claim)) {
+    throw new OpenCodeNoticeCurrentClaimUnavailableError("atomic insertion current-claim proof does not exactly match the durable winner");
+  }
+  assertInsertionReceiptMatches(record, result.receipt);
+}
+function assertInsertionMatches(record, envelope) {
+  if (envelope.operation !== "insert_or_attach") throw new Error("Expected insert_or_attach");
+  const request = payload(envelope);
+  const claim = record.claim;
+  const comparisons = [
+    [claim.deliveryClaimId, request.deliveryClaimId, "deliveryClaimId"],
+    [claim.claimGeneration, request.claimGeneration, "claimGeneration"],
+    [claim.deliveryGroupId, request.deliveryGroupId, "deliveryGroupId"],
+    [claim.membershipRevision, request.membershipRevision, "membershipRevision"],
+    [claim.effectiveDeliveryIntent, request.effectiveDeliveryIntent, "effectiveDeliveryIntent"],
+    [claim.primaryNoticeId, request.primaryNoticeId, "primaryNoticeId"],
+    [claim.recipientPrincipalId, request.recipientPrincipalId, "recipientPrincipalId"],
+    [claim.recipientBindingEpoch, request.recipientBindingEpoch, "recipientBindingEpoch"],
+    [claim.workerGeneration, request.workerGeneration, "workerGeneration"],
+    [claim.ingressMode, request.ingressMode, "ingressMode"]
+  ];
+  for (const [actual, expected, field] of comparisons) assertSame(actual, expected, field, "Notice insertion");
+  if (canonicalJson(claim.memberNoticeIds) !== canonicalJson(request.memberNoticeIds)) {
+    throw new Error("Notice insertion memberNoticeIds do not match the winning claim");
+  }
+  if (canonicalJson(request.transitionIds) !== canonicalJson([claim.transitionId])) {
+    throw new Error("Notice insertion transitionIds do not exactly match the winning claim transition");
+  }
+  const requestedAt = timestamp(request.requestedAt, "$.payload.requestedAt");
+  if (Date.parse(requestedAt) >= Date.parse(claim.expiresAt)) throw new Error("Notice insertion was requested after claim expiry");
+  const reserveRequestedAt = timestamp(payload(record.reserve).requestedAt, "$.reserve.payload.requestedAt");
+  if (Date.parse(requestedAt) < Date.parse(reserveRequestedAt)) throw new Error("Notice insertion predates its reservation");
+}
+function assertLookupMatches(record, request, lookup) {
+  assertSame(record.claim.deliveryClaimId, lookup.deliveryClaimId, "deliveryClaimId", "Target ledger lookup");
+  assertSame(record.claim.claimGeneration, lookup.claimGeneration, "claimGeneration", "Target ledger lookup");
+  const requestedAt = timestamp(payload(request).checkedAt, "$.lookup.payload.checkedAt");
+  if (Date.parse(lookup.checkedAt) < Date.parse(requestedAt)) {
+    throw new Error("Target ledger result predates its authenticated lookup request");
+  }
+}
+function assertInsertionReceiptMatches(record, receipt) {
+  assertSame(record.claim.deliveryClaimId, receipt.deliveryClaimId, "deliveryClaimId", "OpenCode insertion receipt");
+  assertSame(record.claim.claimGeneration, receipt.claimGeneration, "claimGeneration", "OpenCode insertion receipt");
+  if (!receipt.targetLedgerEntryId) throw new Error("OpenCode insertion receipt targetLedgerEntryId is required");
+  const insertedAt = timestamp(receipt.insertedAt, "$.insertedAt");
+  const requestedAt = timestamp(payload(record.insertion).requestedAt, "$.insertion.payload.requestedAt");
+  if (Date.parse(insertedAt) < Date.parse(requestedAt)) throw new Error("OpenCode insertion receipt predates the insertion attempt");
+  if (Date.parse(insertedAt) >= Date.parse(record.claim.expiresAt)) {
+    throw new OpenCodeNoticeCurrentClaimUnavailableError("the insertion receipt is not strictly before the winning claim expiry");
+  }
+}
+function assertReceiptMatches(record, envelope) {
+  if (envelope.operation !== "record_receipt") throw new Error("Expected record_receipt");
+  if (!record.insertion || !record.targetLedgerEntryId || !record.insertedAt) {
+    throw new Error("Cannot receipt a notice without durable target-ledger insertion evidence");
+  }
+  const request = payload(envelope);
+  const claim = record.claim;
+  const comparisons = [
+    [claim.deliveryClaimId, request.deliveryClaimId, "deliveryClaimId"],
+    [claim.claimGeneration, request.claimGeneration, "claimGeneration"],
+    [claim.deliveryGroupId, request.deliveryGroupId, "deliveryGroupId"],
+    [claim.membershipRevision, request.membershipRevision, "membershipRevision"],
+    [claim.recipientPrincipalId, request.recipientPrincipalId, "recipientPrincipalId"],
+    [claim.recipientBindingEpoch, request.recipientBindingEpoch, "recipientBindingEpoch"],
+    [claim.workerGeneration, request.workerGeneration, "workerGeneration"],
+    [claim.ingressMode, request.deliveryMode, "deliveryMode"],
+    [record.targetLedgerEntryId, request.targetLedgerEntryId, "targetLedgerEntryId"],
+    [record.insertedAt, request.insertedAt, "insertedAt"],
+    [payload(record.insertion).resultMessageId, request.resultMessageId, "resultMessageId"]
+  ];
+  for (const [actual, expected, field] of comparisons) assertSame(actual, expected, field, "Notice receipt");
+}
+function assertDeliveredClaimMatches(record, delivered) {
+  if (delivered.state !== "delivered") throw new Error("Receipt authority did not return a delivered claim");
+  const receipt = payload(record.receipt);
+  const immutableFields = [
+    "deliveryClaimId",
+    "claimGeneration",
+    "deliveryGroupId",
+    "membershipRevision",
+    "effectiveDeliveryIntent",
+    "primaryNoticeId",
+    "recipientContext",
+    "recipientSessionId",
+    "recipientTargetSessionId",
+    "recipientPrincipalId",
+    "recipientBindingEpoch",
+    "recipientTransferGeneration",
+    "workerId",
+    "workerGeneration",
+    "transitionId",
+    "transitionVersion",
+    "assignmentId",
+    "turnId",
+    "watchdogGeneration",
+    "ingressMode"
+  ];
+  for (const field of immutableFields) assertSame(record.claim[field], delivered[field], String(field), "Delivered claim");
+  if (canonicalJson(record.claim.memberNoticeIds) !== canonicalJson(delivered.memberNoticeIds)) {
+    throw new Error("Delivered claim memberNoticeIds changed after reservation");
+  }
+  const settlement = [
+    [record.targetLedgerEntryId, delivered.targetLedgerEntryId, "targetLedgerEntryId"],
+    [record.insertedAt, delivered.insertedAt, "insertedAt"],
+    [receipt.deliveryReceiptId, delivered.deliveryReceiptId, "deliveryReceiptId"],
+    [receipt.deliveredAt, delivered.deliveredAt, "deliveredAt"],
+    [receipt.resultMessageId, delivered.resultMessageId, "resultMessageId"],
+    [receipt.coalescedByResult, delivered.coalescedByResult, "coalescedByResult"]
+  ];
+  for (const [actual, expected, field] of settlement) assertSame(actual, expected, field, "Delivered claim");
+}
+function parseRecord(value, path) {
+  const record = ownRecord(value, path);
+  exactKeys(
+    record,
+    ["reserve", "claim", "phase"],
+    ["insertion", "targetLedgerEntryId", "insertedAt", "receipt", "deliveredClaim"],
+    path
+  );
+  const reserve = parseNoticeRecipientIngressEnvelope(record.reserve);
+  const claim = parseDeliveryClaimRecord(record.claim);
+  const phase = record.phase;
+  if (phase !== "reserved" && phase !== "inserting" && phase !== "inserted" && phase !== "receipting" && phase !== "delivered") {
+    throw new Error(`${path}.phase is invalid`);
+  }
+  const insertion = record.insertion === void 0 ? void 0 : parseNoticeRecipientIngressEnvelope(record.insertion);
+  const targetLedgerEntryId = record.targetLedgerEntryId === void 0 ? void 0 : String(record.targetLedgerEntryId);
+  if (record.targetLedgerEntryId !== void 0 && (typeof record.targetLedgerEntryId !== "string" || record.targetLedgerEntryId.length === 0)) {
+    throw new Error(`${path}.targetLedgerEntryId must be a non-empty string`);
+  }
+  const insertedAt = record.insertedAt === void 0 ? void 0 : timestamp(record.insertedAt, `${path}.insertedAt`);
+  const receipt = record.receipt === void 0 ? void 0 : parseNoticeRecipientIngressEnvelope(record.receipt);
+  const deliveredClaim = record.deliveredClaim === void 0 ? void 0 : parseDeliveryClaimRecord(record.deliveredClaim);
+  const parsed = {
+    reserve,
+    claim,
+    phase,
+    ...insertion === void 0 ? {} : { insertion },
+    ...targetLedgerEntryId === void 0 ? {} : { targetLedgerEntryId },
+    ...insertedAt === void 0 ? {} : { insertedAt },
+    ...receipt === void 0 ? {} : { receipt },
+    ...deliveredClaim === void 0 ? {} : { deliveredClaim }
+  };
+  assertReservationMatches(reserve, claim);
+  if (insertion !== void 0) assertInsertionMatches(parsed, insertion);
+  const hasInsertionEvidence = targetLedgerEntryId !== void 0 || insertedAt !== void 0;
+  if (hasInsertionEvidence && (targetLedgerEntryId === void 0 || insertedAt === void 0)) {
+    throw new Error(`${path} target ledger evidence must be present together`);
+  }
+  if (phase === "reserved" && (insertion !== void 0 || hasInsertionEvidence || receipt !== void 0 || deliveredClaim !== void 0)) {
+    throw new Error(`${path} reserved record contains later-phase evidence`);
+  }
+  if (phase === "inserting" && (insertion === void 0 || hasInsertionEvidence || receipt !== void 0 || deliveredClaim !== void 0)) {
+    throw new Error(`${path} inserting record has invalid evidence`);
+  }
+  if (phase === "inserted" && (insertion === void 0 || !hasInsertionEvidence || receipt !== void 0 || deliveredClaim !== void 0)) {
+    throw new Error(`${path} inserted record has invalid evidence`);
+  }
+  if (phase === "receipting" && (insertion === void 0 || !hasInsertionEvidence || receipt === void 0 || deliveredClaim !== void 0)) {
+    throw new Error(`${path} receipting record has invalid evidence`);
+  }
+  if (phase === "delivered" && (insertion === void 0 || !hasInsertionEvidence || receipt === void 0 || deliveredClaim === void 0)) {
+    throw new Error(`${path} delivered record lacks settlement evidence`);
+  }
+  if (receipt !== void 0) assertReceiptMatches(parsed, receipt);
+  if (deliveredClaim !== void 0) assertDeliveredClaimMatches(parsed, deliveredClaim);
+  return parsed;
+}
+function parseState(value) {
+  const state = ownRecord(value, "$noticeIngress");
+  exactKeys(state, ["version", "records"], [], "$noticeIngress");
+  if (state.version !== 1) throw new Error("Unsupported OpenCode notice ingress state version");
+  const recordsValue = ownRecord(state.records, "$noticeIngress.records");
+  const records = /* @__PURE__ */ Object.create(null);
+  const deliveryGroups = /* @__PURE__ */ new Set();
+  for (const [claimId, value2] of Object.entries(recordsValue)) {
+    const record = parseRecord(value2, `$noticeIngress.records[${JSON.stringify(claimId)}]`);
+    if (record.claim.deliveryClaimId !== claimId) throw new Error("Notice ingress claim key does not match its record");
+    if (deliveryGroups.has(record.claim.deliveryGroupId)) throw new Error("Multiple OpenCode notice claims own one delivery group");
+    deliveryGroups.add(record.claim.deliveryGroupId);
+    records[claimId] = record;
+  }
+  return { version: 1, records };
+}
+function clone(record) {
+  return structuredClone(record);
+}
+function cloneState(state) {
+  return parseState(structuredClone(state));
+}
+function getOwnRecord(records, deliveryClaimId) {
+  return Object.hasOwn(records, deliveryClaimId) ? records[deliveryClaimId] : void 0;
+}
+function serializableState(state) {
+  const records = {};
+  for (const [deliveryClaimId, record] of Object.entries(state.records)) {
+    Object.defineProperty(records, deliveryClaimId, {
+      value: clone(record),
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
+  }
+  return { version: 1, records };
+}
+function canonicalState(state) {
+  return canonicalJson(serializableState(state));
+}
+function targetLedgerLookupEnvelope(record) {
+  if (!record.insertion) throw new Error("Cannot look up a notice before insertion begins");
+  const claim = record.claim;
+  const requestNonce = randomUUID6();
+  const checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+  return parseNoticeRecipientIngressEnvelope({
+    version: "orc.notice-recipient-ingress.v1",
+    operation: "lookup_target_ledger",
+    requestId: `${claim.deliveryClaimId}:opencode-ledger:${claim.claimGeneration}:${requestNonce}`,
+    idempotencyKey: `${claim.deliveryClaimId}:opencode-ledger:${claim.claimGeneration}:${requestNonce}`,
+    payload: {
+      deliveryClaimId: claim.deliveryClaimId,
+      claimGeneration: claim.claimGeneration,
+      recipientContext: claim.recipientContext,
+      recipientSessionId: claim.recipientSessionId,
+      ...claim.recipientTargetSessionId === void 0 ? {} : { recipientTargetSessionId: claim.recipientTargetSessionId },
+      checkedAt
+    }
+  });
+}
+var DurableOpenCodeNoticeIngressStore = class {
+  path;
+  state;
+  persist;
+  poisoned;
+  constructor(path, persist = writeDurableJson) {
+    this.path = path;
+    ensureIntercomRuntimeDir(dirname5(path));
+    this.persist = persist;
+    this.state = this.load();
+  }
+  get(deliveryClaimId) {
+    this.assertUsable();
+    const record = getOwnRecord(this.state.records, deliveryClaimId);
+    return record === void 0 ? void 0 : clone(record);
+  }
+  reserve(envelopeValue, claimValue) {
+    this.assertUsable();
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    const claim = parseDeliveryClaimRecord(claimValue);
+    assertReservationMatches(envelope, claim);
+    const existing = getOwnRecord(this.state.records, claim.deliveryClaimId);
+    if (existing) {
+      if (canonicalJson(existing.reserve) !== canonicalJson(envelope) || canonicalJson(existing.claim) !== canonicalJson(claim)) {
+        throw new Error("Conflicting OpenCode notice reservation");
+      }
+      return clone(existing);
+    }
+    if (Object.values(this.state.records).some((record2) => record2.claim.deliveryGroupId === claim.deliveryGroupId)) {
+      throw new Error("A different OpenCode notice claim already owns this delivery group");
+    }
+    const record = { reserve: envelope, claim, phase: "reserved" };
+    const next = cloneState(this.state);
+    next.records[claim.deliveryClaimId] = record;
+    this.commit(next);
+    return clone(record);
+  }
+  beginInsertion(envelopeValue) {
+    this.assertUsable();
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    if (envelope.operation !== "insert_or_attach") throw new Error("Expected insert_or_attach");
+    const claimId = payload(envelope).deliveryClaimId;
+    if (typeof claimId !== "string") throw new Error("Notice insertion omitted deliveryClaimId");
+    const record = getOwnRecord(this.state.records, claimId);
+    if (!record) throw new Error("Notice insertion has no durable winning reservation");
+    assertInsertionMatches(record, envelope);
+    if (record.phase !== "reserved") {
+      if (canonicalJson(record.insertion) !== canonicalJson(envelope)) throw new Error("Conflicting OpenCode notice insertion replay");
+      return clone(record);
+    }
+    const updated = { ...record, phase: "inserting", insertion: envelope };
+    parseRecord(updated, "$record");
+    const next = cloneState(this.state);
+    next.records[claimId] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  markInserted(deliveryClaimId, receipt) {
+    this.assertUsable();
+    const record = getOwnRecord(this.state.records, deliveryClaimId);
+    if (!record || record.phase === "reserved") throw new Error("Cannot receipt an unreserved OpenCode notice insertion");
+    assertInsertionReceiptMatches(record, receipt);
+    if (record.phase !== "inserting") {
+      if (record.targetLedgerEntryId !== receipt.targetLedgerEntryId || record.insertedAt !== receipt.insertedAt) {
+        throw new Error("Conflicting OpenCode notice ledger receipt");
+      }
+      return clone(record);
+    }
+    const updated = {
+      ...record,
+      phase: "inserted",
+      targetLedgerEntryId: receipt.targetLedgerEntryId,
+      insertedAt: receipt.insertedAt
+    };
+    parseRecord(updated, "$record");
+    const next = cloneState(this.state);
+    next.records[deliveryClaimId] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  beginReceipt(envelopeValue) {
+    this.assertUsable();
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    if (envelope.operation !== "record_receipt") throw new Error("Expected record_receipt");
+    const claimId = payload(envelope).deliveryClaimId;
+    if (typeof claimId !== "string") throw new Error("Notice receipt omitted deliveryClaimId");
+    const record = getOwnRecord(this.state.records, claimId);
+    if (!record || record.phase !== "inserted" && record.phase !== "receipting" && record.phase !== "delivered") {
+      throw new Error("Cannot record a receipt before durable OpenCode insertion");
+    }
+    assertReceiptMatches(record, envelope);
+    if (record.phase !== "inserted") {
+      if (canonicalJson(record.receipt) !== canonicalJson(envelope)) throw new Error("Conflicting OpenCode notice receipt replay");
+      return clone(record);
+    }
+    const updated = { ...record, phase: "receipting", receipt: envelope };
+    parseRecord(updated, "$record");
+    const next = cloneState(this.state);
+    next.records[claimId] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  markDelivered(deliveryClaimId, claimValue) {
+    this.assertUsable();
+    const record = getOwnRecord(this.state.records, deliveryClaimId);
+    if (!record || record.phase !== "receipting" && record.phase !== "delivered") {
+      throw new Error("Cannot settle an OpenCode notice before recording its receipt request");
+    }
+    const deliveredClaim = parseDeliveryClaimRecord(claimValue);
+    assertDeliveredClaimMatches(record, deliveredClaim);
+    if (record.phase === "delivered") {
+      if (canonicalJson(record.deliveredClaim) !== canonicalJson(deliveredClaim)) throw new Error("Conflicting delivered claim replay");
+      return clone(record);
+    }
+    const updated = { ...record, phase: "delivered", deliveredClaim };
+    parseRecord(updated, "$record");
+    const next = cloneState(this.state);
+    next.records[deliveryClaimId] = updated;
+    this.commit(next);
+    return clone(updated);
+  }
+  pending() {
+    this.assertUsable();
+    return Object.values(this.state.records).filter((record) => record.phase !== "delivered").map(clone);
+  }
+  load() {
+    if (!existsSync5(this.path)) return emptyState();
+    return parseState(JSON.parse(readFileSync8(this.path, "utf8")));
+  }
+  loadExactTarget() {
+    if (!existsSync5(this.path)) throw new Error("Durable OpenCode notice ingress target is missing");
+    return parseState(JSON.parse(readFileSync8(this.path, "utf8")));
+  }
+  commit(next) {
+    const stagedCanonical = canonicalState(parseState(structuredClone(next)));
+    const priorCanonical = canonicalState(this.state);
+    try {
+      this.persist(this.path, serializableState(parseState(JSON.parse(stagedCanonical))));
+    } catch (persistError) {
+      try {
+        const recovered = this.loadExactTarget();
+        const recoveredCanonical = canonicalState(recovered);
+        if (recoveredCanonical === stagedCanonical) {
+          this.state = parseState(JSON.parse(stagedCanonical));
+        } else if (recoveredCanonical === priorCanonical) {
+          this.state = parseState(JSON.parse(priorCanonical));
+        } else {
+          throw new Error("Durable OpenCode notice ingress state does not match the prior or staged commit");
+        }
+      } catch (reconcileError) {
+        this.poisoned = new Error("Durable OpenCode notice ingress store is unavailable after commit reconciliation failed", {
+          cause: reconcileError
+        });
+      }
+      throw persistError;
+    }
+    this.state = parseState(JSON.parse(stagedCanonical));
+  }
+  assertUsable() {
+    if (this.poisoned) throw this.poisoned;
+  }
+};
+var OpenCodeNoticeRecipientIngress = class {
+  constructor(store, authority, now = () => Date.now()) {
+    this.store = store;
+    this.authority = authority;
+    this.now = now;
+    if (!authority) throw new Error("Authenticated notice authority API is required");
+  }
+  store;
+  authority;
+  now;
+  async reserveBeforePrompt(envelopeValue) {
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    if (envelope.operation !== "reserve_delivery") throw new Error("Expected reserve_delivery");
+    const claim = await this.authority.reserveDelivery(envelope);
+    return this.store.reserve(envelope, claim);
+  }
+  async insertOrAttach(envelopeValue, injectPromptOrAttach) {
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    const claimId = payload(envelope).deliveryClaimId;
+    if (typeof claimId !== "string") throw new Error("Notice insertion omitted deliveryClaimId");
+    const prior = this.store.get(claimId);
+    if (prior?.phase === "reserved") {
+      assertInsertionMatches(prior, envelope);
+      const protectedInsertion = this.authority.insertOrAttachWhileClaimCurrent;
+      if (typeof protectedInsertion !== "function") {
+        throw new OpenCodeNoticeInsertionFencingUnavailableError();
+      }
+      const requestedAt = this.now();
+      assertWallClockFresh(prior.claim, requestedAt);
+      const request = atomicInsertionRequest(prior, envelope, requestedAt);
+      let callbackCalls = 0;
+      let authorityCallOpen = false;
+      let rawResult;
+      const guardedInsertion = async () => {
+        if (!authorityCallOpen || callbackCalls !== 0) throw new Error("FENCING_CALLBACK_CLOSED");
+        callbackCalls = 1;
+        assertWallClockFresh(prior.claim, this.now());
+        const inserting2 = this.store.beginInsertion(envelope);
+        if (inserting2.phase !== "inserting") throw new Error("Protected OpenCode notice insertion did not begin from its reserved phase");
+        return parseInsertionReceipt(await injectPromptOrAttach(envelope), "$protectedInsertionReceipt");
+      };
+      try {
+        authorityCallOpen = true;
+        rawResult = await new Promise((resolve3, reject) => {
+          try {
+            protectedInsertion.call(this.authority, request, guardedInsertion).then(
+              (value) => {
+                authorityCallOpen = false;
+                resolve3(value);
+              },
+              (error) => {
+                authorityCallOpen = false;
+                reject(error);
+              }
+            );
+          } catch (error) {
+            authorityCallOpen = false;
+            reject(error);
+          }
+        });
+      } finally {
+        authorityCallOpen = false;
+      }
+      const result = parseAtomicInsertionResult(rawResult);
+      if (result.status !== "inserted") {
+        if (callbackCalls !== 0) {
+          throw new Error(`Protected insertion authority invoked the target but returned ${result.status}`);
+        }
+        assertAtomicInsertionResultMatches(prior, request, result);
+      }
+      const expectedInserting = {
+        ...prior,
+        phase: "inserting",
+        insertion: envelope
+      };
+      parseRecord(expectedInserting, "$expectedProtectedInsertion");
+      assertAtomicInsertionResultMatches(expectedInserting, request, result);
+      if (callbackCalls !== 1) {
+        throw new Error("Protected insertion authority claimed insertion without invoking the protected target operation");
+      }
+      const inserting = this.store.get(claimId);
+      if (!inserting || inserting.phase !== "inserting") {
+        throw new Error("Protected OpenCode notice insertion lacks its durable inserting phase");
+      }
+      return this.store.markInserted(inserting.claim.deliveryClaimId, result.receipt);
+    }
+    const record = this.store.beginInsertion(envelope);
+    if (record.phase === "inserted" || record.phase === "receipting" || record.phase === "delivered") return record;
+    if (prior?.phase === "inserting") {
+      const lookupEnvelope = targetLedgerLookupEnvelope(record);
+      const lookup = parseTargetLedgerLookupResult(await this.authority.lookupTargetLedger(lookupEnvelope));
+      assertLookupMatches(record, lookupEnvelope, lookup);
+      if (lookup.state === "inserted") {
+        return this.store.markInserted(record.claim.deliveryClaimId, {
+          deliveryClaimId: lookup.deliveryClaimId,
+          claimGeneration: lookup.claimGeneration,
+          targetLedgerEntryId: lookup.targetLedgerEntryId,
+          insertedAt: lookup.insertedAt
+        });
+      }
+      if (lookup.state !== "absent") {
+        throw new Error(`Authenticated target ledger is ${lookup.state}; refusing ambiguous OpenCode replay`);
+      }
+      throw new Error(
+        "Authenticated target-drained proof and generation-incremented current-claim reissue authority are unavailable; refusing OpenCode reinsertion"
+      );
+    }
+    throw new Error("Unexpected OpenCode notice insertion state");
+  }
+  async recordReceipt(envelopeValue) {
+    const envelope = parseNoticeRecipientIngressEnvelope(envelopeValue);
+    const record = this.store.beginReceipt(envelope);
+    if (record.phase === "delivered") return record;
+    const deliveredClaim = await this.authority.recordReceipt(envelope);
+    return this.store.markDelivered(record.claim.deliveryClaimId, deliveredClaim);
+  }
+};
+
 // opencode/plugin.ts
 var INJECT_LOG_PATH = "/tmp/intercom-inject.log";
 function resultText(result) {
@@ -2817,6 +3680,15 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
 };
 var plugin_default = OpenCodeIntercomPlugin;
 export {
+  DurableOpenCodeNoticeIngressStore,
+  OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE,
+  OPENCODE_NOTICE_CURRENT_CLAIM_EVIDENCE_VERSION,
+  OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE,
   OpenCodeIntercomPlugin,
-  plugin_default as default
+  OpenCodeNoticeAuthorityUnavailableError,
+  OpenCodeNoticeCurrentClaimUnavailableError,
+  OpenCodeNoticeRecipientIngress,
+  createProductionOpenCodeNoticeRecipientIngress,
+  plugin_default as default,
+  getOpenCodeNoticeIngressStatePath
 };

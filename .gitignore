@@ -3,5 +3,4 @@ dist/*
 !dist/*.mjs
 *.log
 .DS_Store
-package-lock.json
 progress.md

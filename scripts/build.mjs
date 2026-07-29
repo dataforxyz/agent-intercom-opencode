@@ -1,10 +1,12 @@
 import { build } from "esbuild";
+import { externalizeCorePlugin } from "./core-external.mjs";
 
 const common = {
   bundle: true,
   platform: "node",
   format: "esm",
   target: "node20",
+  plugins: [externalizeCorePlugin],
 };
 
 await Promise.all([

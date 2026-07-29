@@ -1,3 +1,22 @@
+import type {
+  BossControlEnvelope,
+  BossFeatureRegistration,
+  BossParticipantBinding,
+  BossPrivatePrincipal,
+} from "@dataforxyz/agent-intercom-core/boss";
+
+/**
+ * Broker-authenticated Boss metadata. It is intentionally absent from
+ * SessionRegistration so an ordinary client cannot self-assert a run, role,
+ * or binding epoch.
+ */
+export interface BossSessionMetadata {
+  registration: BossFeatureRegistration;
+  principal: BossPrivatePrincipal;
+  /** Controller principals have no participant binding; all other roles do. */
+  binding?: BossParticipantBinding;
+}
+
 export interface SessionInfo {
   id: string;
   name?: string;
@@ -18,6 +37,7 @@ export interface SessionInfo {
   depth?: number;
   maxDepth?: number;
   maxChildren?: number;
+  boss?: BossSessionMetadata;
 }
 
 export interface Message {
@@ -40,7 +60,7 @@ export interface Attachment {
 
 export type SessionRegistration = Omit<
   SessionInfo,
-  "id" | "peerUid" | "trustedLocal" | "origin" | "remoteHostId" | "parentSessionId" | "rootSessionId" | "generation" | "canDelegate" | "depth" | "maxDepth" | "maxChildren"
+  "id" | "peerUid" | "trustedLocal" | "origin" | "remoteHostId" | "parentSessionId" | "rootSessionId" | "generation" | "canDelegate" | "depth" | "maxDepth" | "maxChildren" | "boss"
 > & {
   /** Ephemeral identity shared only by reconnects from one live runtime. */
   runtimeInstanceId?: string;
@@ -110,7 +130,9 @@ export type DeliveryFailureCode =
   | "TOO_MANY_PENDING_ASKS"
   | "RECIPIENT_DISCONNECTED"
   | "SENDER_DISCONNECTED"
-  | "DELIVERY_TIMEOUT";
+  | "DELIVERY_TIMEOUT"
+  | "INVALID_BOSS_CONTROL"
+  | "BOSS_CONTROL_DENIED";
 
 export type BrokerErrorCode =
   | "PROTOCOL_MISMATCH"
@@ -140,6 +162,8 @@ export type ClientMessage =
   | { type: "unregister"; preserveAsks?: boolean }
   | { type: "list"; requestId: string }
   | { type: "send"; to: string; message: Message }
+  | { type: "boss_control_send"; to: string; envelope: BossControlEnvelope }
+  | { type: "boss_control_received"; deliveryId: string }
   | { type: "message_received"; deliveryId: string }
   | { type: "message_rejected"; deliveryId: string; code: "CONFLICTING_MESSAGE_ID"; reason: string }
   | { type: "defer_ask"; requestId: string; messageId: string }
@@ -156,6 +180,11 @@ export type BrokerMessage =
   | { type: "access_control_result"; requestId: string; action: "issue_child_enrollment"; enrollmentToken: string; expiresAt: number; parentSessionId: string }
   | { type: "sessions"; requestId: string; sessions: SessionInfo[] }
   | { type: "message"; deliveryId: string; from: SessionInfo; message: Message }
+  | { type: "boss_control"; deliveryId: string; from: SessionInfo; envelope: BossControlEnvelope }
+  | { type: "boss_control_accepted"; messageId: string; deliveryId: string }
+  | { type: "boss_control_delivered"; messageId: string; deliveryId: string }
+  | { type: "boss_control_failed"; messageId: string; accepted: false; code: DeliveryFailureCode; reason: string }
+  | { type: "boss_control_failed"; messageId: string; deliveryId: string; accepted: true; code: DeliveryFailureCode; reason: string }
   | { type: "presence_update"; session: SessionInfo }
   | { type: "session_joined"; session: SessionInfo }
   | { type: "session_left"; sessionId: string }

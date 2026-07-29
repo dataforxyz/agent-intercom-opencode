@@ -66,6 +66,10 @@ export function getBrokerAskStateFilePath(intercomDir: string = getIntercomDirPa
   return join(intercomDir, "broker-asks.json");
 }
 
+export function getBrokerBossControlStateFilePath(intercomDir: string = getIntercomDirPath()): string {
+  return join(intercomDir, "broker-boss-controls.json");
+}
+
 export function getBrokerAccessStateFilePath(intercomDir: string = getIntercomDirPath()): string {
   return join(intercomDir, "broker-access.json");
 }

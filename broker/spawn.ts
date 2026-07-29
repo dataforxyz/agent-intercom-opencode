@@ -5,7 +5,10 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import net from "net";
 import { randomUUID } from "crypto";
-import { POLICY_SEMANTICS_HASH, POLICY_SEMANTICS_VERSION } from "@dataforxyz/agent-intercom-core";
+import {
+  POLICY_SEMANTICS_HASH,
+  POLICY_SEMANTICS_VERSION,
+} from "@dataforxyz/agent-intercom-core";
 import { createMessageReader, writeMessage } from "./framing.ts";
 import {
   ensureIntercomRuntimeDir,

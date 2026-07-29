@@ -1,161 +1,53 @@
 // opencode/contact.ts
 import { spawnSync } from "node:child_process";
 
-// ../../src/github.com/dataforxyz/agent-intercom-opencode/node_modules/@dataforxyz/agent-intercom-core/dist/policy-vectors.js
-var localRoot = {
-  id: "local-root",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-root"
+// broker/client.ts
+import {
+  POLICY_SEMANTICS_HASH,
+  POLICY_SEMANTICS_VERSION
+} from "@dataforxyz/agent-intercom-core";
+import {
+  parseBossControlEnvelope as parseBossControlEnvelope2
+} from "@dataforxyz/agent-intercom-core/boss";
+import { assertExactKeys as assertExactKeys2 } from "@dataforxyz/agent-intercom-core/canonical";
+
+// broker/boss.ts
+import {
+  BOSS_CONTROL_TYPES,
+  parseBossControlEnvelope,
+  parseBossParticipantBinding,
+  parseBossPolicyPrincipal,
+  parseFeatureRegistration
+} from "@dataforxyz/agent-intercom-core/boss";
+import {
+  ContractValidationError,
+  assertExactKeys,
+  assertRecord
+} from "@dataforxyz/agent-intercom-core/canonical";
+var CONTROL_KIND_BY_TYPE = {
+  "boss.assignment.created": "assignment_request",
+  "boss.assignment.accepted": "assignment_response",
+  "boss.assignment.checkpoint": "assignment_response",
+  "boss.assignment.submitted": "assignment_response",
+  "boss.assignment.rejected": "assignment_response",
+  "boss.assignment.cancelled": "lifecycle",
+  "boss.staffing.requested": "staffing",
+  "boss.staffing.resolved": "staffing",
+  "boss.review.requested": "review_request",
+  "boss.review.submitted": "review_result",
+  "boss.council.requested": "review_request",
+  "boss.council.submitted": "review_result",
+  "boss.proof.submitted": "proof",
+  "boss.worker.health": "health",
+  "boss.worker.blocked": "health",
+  "boss.worker.failed": "health",
+  "boss.worker.notice": "lifecycle",
+  "boss.worker.notice_delivery_failed": "lifecycle",
+  "boss.decision.required": "decision"
 };
-var localPeer = {
-  id: "local-peer",
-  kind: "local",
-  state: "active",
-  generation: 1,
-  policy: "local-public",
-  rootSessionId: "local-peer"
-};
-var remoteManager = {
-  id: "remote-manager",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "local-root",
-  rootSessionId: "local-root"
-};
-var remoteChild = {
-  id: "remote-child",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var remoteSibling = {
-  id: "remote-sibling",
-  kind: "remote",
-  state: "active",
-  generation: 1,
-  policy: "remote-tree",
-  parentSessionId: "remote-manager",
-  rootSessionId: "local-root"
-};
-var POLICY_VECTORS = [
-  {
-    name: "local sessions remain public",
-    principals: [localRoot, localPeer],
-    actorId: "local-root",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: true,
-    expectedReasonOrCode: "local-public"
-  },
-  {
-    name: "remote manager can reach direct local parent",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "local parent can reach direct remote child",
-    principals: [localRoot, remoteManager],
-    actorId: "local-root",
-    action: "ask",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "direct-parent"
-  },
-  {
-    name: "remote child can reach its local root through the ancestor chain",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-chain"
-  },
-  {
-    name: "remote siblings cannot communicate in phase one",
-    principals: [localRoot, remoteManager, remoteChild, remoteSibling],
-    actorId: "remote-child",
-    action: "discover",
-    targetId: "remote-sibling",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "unrelated local session cannot discover remote principal",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "local-peer",
-    action: "discover",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal cannot reach unrelated local session",
-    principals: [localRoot, localPeer, remoteManager],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-peer",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote manager may inspect its descendant subtree",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-manager",
-    action: "inspect_tree",
-    targetId: "remote-child",
-    expectedAllowed: true,
-    expectedReasonOrCode: "ancestor-control"
-  },
-  {
-    name: "remote child cannot revoke its ancestor",
-    principals: [localRoot, remoteManager, remoteChild],
-    actorId: "remote-child",
-    action: "revoke",
-    targetId: "remote-manager",
-    expectedAllowed: false,
-    expectedReasonOrCode: "POLICY_DENIED"
-  },
-  {
-    name: "remote principal may request attenuated delegation under itself",
-    principals: [localRoot, remoteManager],
-    actorId: "remote-manager",
-    action: "delegate_child",
-    targetId: "remote-manager",
-    expectedAllowed: true,
-    expectedReasonOrCode: "self"
-  },
-  {
-    name: "revoked principal cannot communicate",
-    principals: [localRoot, { ...remoteManager, state: "revoked" }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    expectedAllowed: false,
-    expectedReasonOrCode: "REVOKED_PRINCIPAL"
-  },
-  {
-    name: "stale actor generation cannot send",
-    principals: [localRoot, { ...remoteManager, generation: 2 }],
-    actorId: "remote-manager",
-    action: "send",
-    targetId: "local-root",
-    context: { actorGeneration: 1 },
-    expectedAllowed: false,
-    expectedReasonOrCode: "STALE_GENERATION"
-  }
-];
+if (Object.keys(CONTROL_KIND_BY_TYPE).length !== BOSS_CONTROL_TYPES.length) {
+  throw new Error("Boss control type mapping is incomplete");
+}
 
 // broker/framing.ts
 var MAX_FRAME_BYTES = 1024 * 1024;
@@ -181,9 +73,37 @@ function restrictIntercomRuntimeFile(filePath, platform = process.platform) {
   }
 }
 
+// durable-json.ts
+import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from "fs";
+var DURABLE_JSON_FILE_OPERATIONS = Object.freeze({
+  writeFile(filePath, contents, options) {
+    writeFileSync(filePath, contents, options);
+  },
+  open(filePath, flags) {
+    return openSync(filePath, flags);
+  },
+  fsync(fileDescriptor) {
+    fsyncSync(fileDescriptor);
+  },
+  close(fileDescriptor) {
+    closeSync(fileDescriptor);
+  },
+  rename(from, to) {
+    renameSync(from, to);
+  },
+  restrict(filePath) {
+    restrictIntercomRuntimeFile(filePath);
+  },
+  platform: process.platform
+});
+
 // broker/spawn.ts
 import { join as join2, dirname, extname, basename } from "path";
 import { fileURLToPath } from "url";
+import {
+  POLICY_SEMANTICS_HASH as POLICY_SEMANTICS_HASH2,
+  POLICY_SEMANTICS_VERSION as POLICY_SEMANTICS_VERSION2
+} from "@dataforxyz/agent-intercom-core";
 var INTERCOM_DIR = getIntercomDirPath();
 var EXTENSION_DIR = join2(dirname(fileURLToPath(import.meta.url)), "..");
 var BROKER_PID = join2(INTERCOM_DIR, "broker.pid");
@@ -204,7 +124,7 @@ function copyText(text, platform = process.platform) {
 
 // opencode/control.ts
 import { randomUUID } from "node:crypto";
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, readdirSync, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
 import { join as join3 } from "node:path";
 var CONTROL_DIR_NAME = "opencode-control";
 function controlDir() {
@@ -223,9 +143,9 @@ function responseName(sessionId, requestId) {
 }
 function writeJsonAtomic(path, value) {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value), { mode: 384 });
+  writeFileSync2(temporary, JSON.stringify(value), { mode: 384 });
   restrictIntercomRuntimeFile(temporary);
-  renameSync(temporary, path);
+  renameSync2(temporary, path);
   restrictIntercomRuntimeFile(path);
 }
 async function requestOpenCodeControl(sessionId, action, timeoutMs = 5e3) {
