@@ -29,7 +29,7 @@ import {
 const repositoryRoot = new URL("..", import.meta.url);
 const generatedProviderUrl = new URL("provider/provider.mjs", repositoryRoot);
 const buildScriptUrl = new URL("scripts/build-protected-provider.mjs", repositoryRoot);
-const ordinaryDistNames = ["broker.mjs", "plugin.mjs", "tui.mjs"];
+const ordinaryDistNames = ["broker.mjs", "index.mjs", "plugin.mjs", "tui.mjs"];
 
 function generatedProviderBytes(): Buffer {
   return readFileSync(generatedProviderUrl);

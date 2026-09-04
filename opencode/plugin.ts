@@ -6,19 +6,9 @@ import { invokeAgentFleet, isFleetManagementEnabled } from "./fleet.ts";
 import { startOpenCodeControlServer } from "./control.ts";
 import { validateAskTimeoutMs } from "../config.ts";
 
-// Public, bundled contract surface. Production creation intentionally fails
-// closed until the protected authority client and typed notice ingress exist.
-export {
-  createProductionOpenCodeNoticeRecipientIngress,
-  DurableOpenCodeNoticeIngressStore,
-  getOpenCodeNoticeIngressStatePath,
-  OpenCodeNoticeAuthorityUnavailableError,
-  OpenCodeNoticeCurrentClaimUnavailableError,
-  OpenCodeNoticeRecipientIngress,
-  OPENCODE_NOTICE_AUTHORITY_UNAVAILABLE,
-  OPENCODE_NOTICE_CURRENT_CLAIM_EVIDENCE_VERSION,
-  OPENCODE_NOTICE_CURRENT_CLAIM_UNAVAILABLE,
-} from "./notice-ingress.ts";
+// OpenCode v1 treats every export from a configured server-plugin module as
+// a plugin factory. Keep this module default-only; package consumers import
+// the public contract from dist/index.mjs instead.
 
 const INJECT_LOG_PATH = "/tmp/intercom-inject.log";
 
@@ -40,7 +30,7 @@ function listScope(value: string | undefined): "machine" | "directory" | "repo" 
   throw new Error('scope must be one of "machine", "directory", or "repo"');
 }
 
-export const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, serverUrl }) => {
+const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, serverUrl }) => {
   let activeSessionID = process.env.OPENCODE_INTERCOM_TARGET_SESSION?.trim() || process.env.OPENCODE_SESSION_ID?.trim() || undefined;
   let activeSessionStatus = "idle";
   const knownSessionIDs = new Set<string>();
