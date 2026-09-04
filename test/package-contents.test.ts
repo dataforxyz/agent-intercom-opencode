@@ -30,9 +30,9 @@ test("protected provider is neither an export, plugin, executable, nor ordinary 
   const packageManifest = manifest();
   const ordinaryBuild = readFileSync(new URL("scripts/build.mjs", repositoryRoot), "utf8");
 
-  assert.equal(packageManifest.main, "dist/plugin.mjs");
+  assert.equal(packageManifest.main, "dist/index.mjs");
   assert.deepEqual(packageManifest.exports, {
-    ".": "./dist/plugin.mjs",
+    ".": "./dist/index.mjs",
     "./tui": "./dist/tui.mjs",
   });
   assert.equal(packageManifest.bin, undefined);
@@ -40,6 +40,7 @@ test("protected provider is neither an export, plugin, executable, nor ordinary 
   assert.doesNotMatch(ordinaryBuild, /protected-provider|provider\/provider\.mjs|provider\/entry\.ts/);
   assert.deepEqual(Array.from(ordinaryBuild.matchAll(/entryPoints: \["([^"]+)"\]/g), (match) => match[1]), [
     "opencode/plugin.ts",
+    "opencode/public.ts",
     "opencode/tui.ts",
     "broker/broker.ts",
   ]);
@@ -48,7 +49,7 @@ test("protected provider is neither an export, plugin, executable, nor ordinary 
   assert.equal(packageManifest.scripts.prepack, "npm run build:protected-provider");
 });
 
-test("ordinary builds retain the shared Core externalizer and exactly three dist bundles", () => {
+test("ordinary builds retain the shared Core externalizer and exactly four dist bundles", () => {
   const ordinaryBuild = readFileSync(new URL("scripts/build.mjs", repositoryRoot), "utf8");
   const coreExternalizer = readFileSync(new URL("scripts/core-external.mjs", repositoryRoot), "utf8");
 
@@ -56,6 +57,7 @@ test("ordinary builds retain the shared Core externalizer and exactly three dist
   assert.match(ordinaryBuild, /plugins: \[externalizeCorePlugin\]/);
   assert.deepEqual(Array.from(ordinaryBuild.matchAll(/outfile: "dist\/([^"]+)"/g), (match) => match[1]), [
     "plugin.mjs",
+    "index.mjs",
     "tui.mjs",
     "broker.mjs",
   ]);

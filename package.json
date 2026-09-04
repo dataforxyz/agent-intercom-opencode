@@ -7,9 +7,9 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "main": "dist/plugin.mjs",
+  "main": "dist/index.mjs",
   "exports": {
-    ".": "./dist/plugin.mjs",
+    ".": "./dist/index.mjs",
     "./tui": "./dist/tui.mjs"
   },
   "files": [
@@ -41,7 +41,7 @@
     "build:protected-provider": "node scripts/build-protected-provider.mjs",
     "prepack": "npm run build:protected-provider",
     "prepare": "npm run build",
-    "test": "tsx --test broker/*.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/notice-ingress.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts provider/*.test.ts test/*.test.ts",
+    "test": "tsx --test broker/*.test.ts opencode/contact.test.ts opencode/control.test.ts opencode/fleet.test.ts opencode/health.test.ts opencode/inbound-store.test.ts opencode/notice-ingress.test.ts opencode/runtime.test.ts opencode/team.test.ts opencode/tui.test.ts opencode/plugin-contract.test.ts provider/*.test.ts test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
