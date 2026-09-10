@@ -2511,6 +2511,9 @@ var OpenCodeIntercomPlugin = async ({ client, directory, serverUrl }) => {
     return { value: error };
   }
   async function logResult(step, result, details = {}) {
+    if (!debugInject) {
+      return;
+    }
     const responseBody = result.response ? await result.response.clone().text().catch(() => void 0) : void 0;
     logInject(step, {
       ...details,

@@ -73,6 +73,9 @@ const OpenCodeIntercomPlugin: Plugin = async ({ client, directory, serverUrl }) 
     error?: unknown;
     response?: Response;
   }, details: Record<string, unknown> = {}): Promise<void> {
+    if (!debugInject) {
+      return;
+    }
     const responseBody = result.response
       ? await result.response.clone().text().catch(() => undefined)
       : undefined;
