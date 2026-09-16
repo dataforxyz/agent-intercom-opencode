@@ -71,6 +71,21 @@ cd ~/.config/opencode
 npm install @dataforxyz/agent-intercom-opencode
 ```
 
+For OpenCode v2, add the native v2 entrypoint to `opencode.json`:
+
+```json
+{
+  "plugins": ["@dataforxyz/agent-intercom-opencode/v2"]
+}
+```
+
+The v2 entrypoint uses the v2 tool, session, permission, and event APIs directly.
+It filters the public event stream by the plugin location before updating the
+active session, preventing one directory's messages from being routed into a
+different OpenCode pane.
+
+For OpenCode v1, continue with the server and TUI configuration below.
+
 The packaged `dist` files are prebuilt. Add the server plugin to your normal OpenCode config (usually `~/.config/opencode/opencode.json`), replacing `/home/you` with your absolute home path:
 
 ```json

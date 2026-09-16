@@ -18,6 +18,12 @@ await Promise.all([
   }),
   build({
     ...common,
+    entryPoints: ["opencode/plugin-v2.ts"],
+    outfile: "dist/plugin-v2.mjs",
+    external: ["@opencode-ai/plugin", "@opencode/plugin"],
+  }),
+  build({
+    ...common,
     entryPoints: ["opencode/public.ts"],
     outfile: "dist/index.mjs",
     external: ["@opencode-ai/plugin"],
