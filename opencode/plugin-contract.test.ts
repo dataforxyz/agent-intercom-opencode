@@ -7,6 +7,13 @@ test("configured server-plugin bundle exposes only its default factory", async (
   assert.equal(typeof plugin.default, "function");
 });
 
+test("OpenCode v2 bundle exposes a native setup plugin", async () => {
+  const plugin = await import(new URL("../dist/plugin-v2.mjs", import.meta.url).href);
+  assert.deepEqual(Object.keys(plugin), ["default"]);
+  assert.equal(plugin.default.id, "agent-intercom");
+  assert.equal(typeof plugin.default.setup, "function");
+});
+
 test("package library bundle retains the public adapter contract", async () => {
   const library = await import(new URL("../dist/index.mjs", import.meta.url).href);
   assert.deepEqual(Object.keys(library).sort(), [

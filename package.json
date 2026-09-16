@@ -10,6 +10,7 @@
   "main": "dist/index.mjs",
   "exports": {
     ".": "./dist/index.mjs",
+    "./v2": "./dist/plugin-v2.mjs",
     "./tui": "./dist/tui.mjs"
   },
   "files": [
@@ -57,6 +58,7 @@
   },
   "devDependencies": {
     "@dataforxyz/agent-intercom-core": "git+https://github.com/dataforxyz/agent-intercom-core.git#8316cbab548f422ad11c78ed887fabeef94817c1",
+    "@opencode/plugin": "^2.0.3",
     "@types/node": "^24.0.0",
     "esbuild": "^0.28.1",
     "tsx": "^4.20.0",
