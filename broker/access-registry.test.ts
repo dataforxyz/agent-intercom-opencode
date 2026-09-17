@@ -264,3 +264,76 @@ test("recursive revoke increments generations and invalidates reconnect", () => 
     f.close();
   }
 });
+
+test("revoke cancels pending enrollments throughout the subtree and persists the cancellation", () => {
+  const f = fixture();
+  try {
+    const parent = f.registry.consumeEnrollment(f.registry.issueEnrollment({
+      ...template, canDelegate: true, maxDepth: 3, maxChildren: 2,
+    }).enrollmentToken);
+    const child = f.registry.consumeEnrollment(f.registry.issueChildEnrollment(parent.principal.id, 1, {
+      name: "child", canDelegate: true, maxDepth: 3, maxChildren: 1,
+    }).enrollmentToken);
+    const pendingChild = f.registry.issueChildEnrollment(parent.principal.id, 1, { name: "pending-child" });
+    const pendingGrandchild = f.registry.issueChildEnrollment(child.principal.id, 1, { name: "pending-grandchild" });
+    const unrelated = f.registry.issueEnrollment({ ...template, name: "unrelated" });
+
+    f.registry.revoke(parent.principal.id);
+    assert.equal(Object.keys(f.registry.snapshot().enrollments).length, 1);
+    const reloaded = new RemoteAccessRegistry(join(f.root, "broker-access.json"), () => 1_800_000_000_000);
+    for (const registry of [f.registry, reloaded]) {
+      for (const pending of [pendingChild, pendingGrandchild]) {
+        assert.throws(
+          () => registry.consumeEnrollment(pending.enrollmentToken),
+          (error: unknown) => error instanceof RemoteAccessError && error.code === "INVALID_ENROLLMENT",
+        );
+      }
+    }
+    assert.equal(reloaded.consumeEnrollment(unrelated.enrollmentToken).principal.name, "unrelated");
+  } finally {
+    f.close();
+  }
+});
+
+test("expiry reconciliation cancels outstanding child enrollment tokens", () => {
+  const f = fixture();
+  try {
+    const parent = f.registry.consumeEnrollment(f.registry.issueEnrollment({
+      ...template, expiresAt: 1_800_000_001_000, canDelegate: true, maxDepth: 2, maxChildren: 1,
+    }).enrollmentToken);
+    const pending = f.registry.issueChildEnrollment(parent.principal.id, 1, { name: "pending-child" });
+    f.advance(1001);
+    f.registry.expirePrincipals();
+    assert.throws(
+      () => f.registry.consumeEnrollment(pending.enrollmentToken),
+      (error: unknown) => error instanceof RemoteAccessError && error.code === "INVALID_ENROLLMENT",
+    );
+    assert.equal(Object.keys(f.registry.snapshot().enrollments).length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("redemption rejects tokens retained by an older registry after parent revocation", () => {
+  const f = fixture();
+  try {
+    const parent = f.registry.consumeEnrollment(f.registry.issueEnrollment({
+      ...template, canDelegate: true, maxDepth: 2, maxChildren: 1,
+    }).enrollmentToken);
+    const pending = f.registry.issueChildEnrollment(parent.principal.id, 1, { name: "pending-child" });
+    const legacyEnrollments = f.registry.snapshot().enrollments;
+    f.registry.revoke(parent.principal.id);
+    const state = f.registry.snapshot();
+    state.enrollments = legacyEnrollments;
+    const path = join(f.root, "broker-access.json");
+    writeFileSync(path, JSON.stringify(state));
+    const reloaded = new RemoteAccessRegistry(path, () => 1_800_000_000_000);
+    assert.throws(
+      () => reloaded.consumeEnrollment(pending.enrollmentToken),
+      (error: unknown) => error instanceof RemoteAccessError && error.code === "INVALID_ENROLLMENT",
+    );
+    assert.equal(Object.keys(new RemoteAccessRegistry(path).snapshot().enrollments).length, 0);
+  } finally {
+    f.close();
+  }
+});
