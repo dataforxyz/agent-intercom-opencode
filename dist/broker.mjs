@@ -475,6 +475,11 @@ var RemoteAccessRegistry = class {
       this.persist();
       throw new RemoteAccessError("INVALID_ENROLLMENT", "Enrollment credential has expired");
     }
+    const parent = this.state.principals[enrollment.template.parentSessionId];
+    if (parent && (parent.state !== "active" || parent.expiresAt <= now)) {
+      this.persist();
+      throw new RemoteAccessError("INVALID_ENROLLMENT", "Enrollment parent is no longer active");
+    }
     const sessionCredential = newSecret();
     const id = randomUUID2();
     const principal = {
@@ -586,6 +591,10 @@ var RemoteAccessRegistry = class {
       for (const candidate of Object.values(this.state.principals)) {
         if (candidate.parentSessionId === id) queue.push(candidate.id);
       }
+    }
+    const revokedIds = new Set(changed.map((principal) => principal.id));
+    for (const [hash, enrollment] of Object.entries(this.state.enrollments)) {
+      if (revokedIds.has(enrollment.template.parentSessionId)) delete this.state.enrollments[hash];
     }
     if (changed.length) this.persist();
     return changed;
