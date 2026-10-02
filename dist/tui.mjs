@@ -64,8 +64,10 @@ function getAgentDirPath(env = process.env, homeDir = homedir(), cwd = process.c
   }
   return isAbsolute(configured) ? configured : resolve(cwd, configured);
 }
-function getIntercomDirPath(agentDir = getAgentDirPath()) {
-  return join(agentDir, "intercom");
+function getIntercomDirPath(agentDir = getAgentDirPath(), env = process.env, cwd = process.cwd()) {
+  const configured = env.INTERCOM_DIR?.trim();
+  if (!configured) return join(agentDir, "intercom");
+  return isAbsolute(configured) ? configured : resolve(cwd, configured);
 }
 function restrictIntercomRuntimeFile(filePath, platform = process.platform) {
   if (platform !== "win32") {

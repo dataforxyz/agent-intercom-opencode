@@ -94,8 +94,10 @@ function getAgentDirPath(env = process.env, homeDir = homedir(), cwd = process.c
   }
   return isAbsolute(configured) ? configured : resolve(cwd, configured);
 }
-function getIntercomDirPath(agentDir = getAgentDirPath()) {
-  return join(agentDir, "intercom");
+function getIntercomDirPath(agentDir = getAgentDirPath(), env = process.env, cwd = process.cwd()) {
+  const configured = env.INTERCOM_DIR?.trim();
+  if (!configured) return join(agentDir, "intercom");
+  return isAbsolute(configured) ? configured : resolve(cwd, configured);
 }
 function shouldUseWindowsTcpTransport(platform = process.platform, env = process.env) {
   if (platform !== "win32") {
@@ -126,23 +128,25 @@ function getBrokerAdminCredentialFilePath(intercomDir = getIntercomDirPath()) {
 function getBrokerAuditFilePath(intercomDir = getIntercomDirPath()) {
   return join(intercomDir, "broker-audit.jsonl");
 }
-function getRemoteGatewaySocketPath(platform = process.platform, agentDir = getAgentDirPath()) {
+function getRemoteGatewaySocketPath(platform = process.platform, agentDir = getAgentDirPath(), env = process.env) {
+  const intercomDir = getIntercomDirPath(agentDir, env);
   if (platform === "win32") {
-    return `\\\\.\\pipe\\pi-intercom-remote-${sanitizePipeSegment(agentDir)}`;
+    return `\\\\.\\pipe\\pi-intercom-remote-${sanitizePipeSegment(env.INTERCOM_DIR?.trim() ? intercomDir : agentDir)}`;
   }
-  return join(getIntercomDirPath(agentDir), "remote-gateway.sock");
+  return join(intercomDir, "remote-gateway.sock");
 }
-function getBrokerSocketPath(platform = process.platform, agentDir = getAgentDirPath()) {
+function getBrokerSocketPath(platform = process.platform, agentDir = getAgentDirPath(), env = process.env) {
+  const intercomDir = getIntercomDirPath(agentDir, env);
   if (platform === "win32") {
-    return `\\\\.\\pipe\\pi-intercom-${sanitizePipeSegment(agentDir)}`;
+    return `\\\\.\\pipe\\pi-intercom-${sanitizePipeSegment(env.INTERCOM_DIR?.trim() ? intercomDir : agentDir)}`;
   }
-  return join(getIntercomDirPath(agentDir), "broker.sock");
+  return join(intercomDir, "broker.sock");
 }
 function getBrokerListenTarget(platform = process.platform, env = process.env) {
   if (shouldUseWindowsTcpTransport(platform, env)) {
     return { transport: "tcp", host: INTERCOM_TCP_HOST, port: 0 };
   }
-  return getBrokerSocketPath(platform, getAgentDirPath(env));
+  return getBrokerSocketPath(platform, getAgentDirPath(env), env);
 }
 function ensureIntercomRuntimeDir(intercomDir = getIntercomDirPath(), platform = process.platform) {
   mkdirSync(intercomDir, { recursive: true, mode: INTERCOM_DIR_MODE });
